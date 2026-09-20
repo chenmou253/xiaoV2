@@ -1265,14 +1265,12 @@ function Drafts({
     const label = kind === "sentence" ? "整句" : "单词";
     const accentLabel = accent === "en-US" ? "美音" : "英音";
     const ok = await runResult(async () => {
-      // Persist the editor first so the TTS worker always reads exactly the
-      // text currently visible in this page editor. If content changed, the
-      // existing page audio is invalidated by SavePage before this one item is
-      // queued, preserving the normal consistency rules.
-      const latest = await savePageReview("", "none", page.content);
+      // Item-only regeneration must never save/invalidate the whole page.
+      // Send the visible text so the backend can reject unsaved edits instead
+      // of silently regenerating stale content or clearing unrelated audio.
       await api(`/admin/drafts/${encodeURIComponent(id)}/pages/${pageNo}/audio/${encodeURIComponent(itemID)}/regenerate`, {
         method: "POST",
-        body: JSON.stringify({ accent, version: latest.draft.version }),
+        body: JSON.stringify({ accent, version: detail.draft.version, text }),
       });
       await Promise.all([loadDetail(id, pageNo), loadAudioIssues(id, pageNo)]);
       notice(`${label}“${text}”的${accentLabel}已进入单项重新生成队列`);
