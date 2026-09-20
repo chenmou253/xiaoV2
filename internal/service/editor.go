@@ -2035,6 +2035,10 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 	})
 }
 
+func translationSpellingHint(value string) bool {
+	return strings.Contains(value, "拼写错误") || strings.Contains(value, "拼写有误")
+}
+
 func publicationIssues(content map[string]any) []string {
 	segments, ok := content["segments"].([]any)
 	if !ok {
@@ -2078,6 +2082,9 @@ func publicationIssues(content map[string]any) []string {
 			meaning, _ := w["meaning"].(string)
 			if wid == "" || ids[wid] || wt == "" || meaning == "" {
 				issues = append(issues, "单词 ID、英文或词义无效")
+			}
+			if translationSpellingHint(meaning) {
+				issues = append(issues, wt+"：翻译模型提示拼写错误，请人工核对")
 			}
 			if regexp.MustCompile(`[A-Za-z]`).MatchString(wt) {
 				phonetic, _ := w["phonetic"].(string)
