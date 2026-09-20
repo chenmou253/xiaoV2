@@ -255,7 +255,7 @@ func (h *EditorHandler) RegenerateAudioItem(c *gin.Context) {
 	success(c, gin.H{"ok": true})
 }
 
-func (h *EditorHandler) UploadWordAudio(c *gin.Context) {
+func (h *EditorHandler) UploadAudioItem(c *gin.Context) {
 	p, ok := pageParam(c)
 	if !ok {
 		return
@@ -299,7 +299,7 @@ func (h *EditorHandler) UploadWordAudio(c *gin.Context) {
 		failure(c, http.StatusBadRequest, 40000, "草稿版本无效")
 		return
 	}
-	if err = h.service.UploadWordAudio(
+	if err = h.service.UploadAudioItem(
 		c.Request.Context(), c.Param("draftId"), p, c.Param("itemId"),
 		c.PostForm("text"), source, version, identity(c).ID,
 	); err != nil {
