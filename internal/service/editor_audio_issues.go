@@ -219,6 +219,126 @@ func retryAudioIssueSettings(draft model.TextbookDraft, pageSettings ai.Settings
 	return selected, voiceID, nil
 }
 
+func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page int, itemID, accent string, version, actor uint64) error {
+	if itemID == "" || (accent != "en-US" && accent != "en-GB") {
+		return bad("音频条目或口音无效")
+	}
+	if err := s.ensureDraftAudioState(ctx, id); err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var draft model.TextbookDraft
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&draft, "id=?", id).Error; err != nil {
+			return err
+		}
+		if draft.Version != version {
+			return conflict("草稿已更新，请刷新")
+		}
+		if draft.Status != "draft" && draft.Status != "failed" {
+			return conflict("当前状态不能重新生成音频")
+		}
+
+		var active int64
+		if err := tx.Model(&model.TextbookJob{}).
+			Where("draft_id=? AND status IN ?", id, []string{"queued", "running"}).
+			Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return conflict("已有音频或页面生成任务正在进行，请完成后再重新生成")
+		}
+
+		var draftPage model.TextbookDraftPage
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("draft_id=? AND position=?", id, page).First(&draftPage).Error; err != nil {
+			return err
+		}
+		contentItem, err := s.lookupAudioContentItem(tx, id, page, itemID)
+		if err != nil {
+			return err
+		}
+
+		settings := pageAudioSettings(draft, draftPage)
+		selected, ok := ai.Find(settings.TTSModel)
+		if !ok || selected.Type != "tts" || !selected.Enabled || !selected.Available {
+			return bad("当前 TTS 模型不可用")
+		}
+		voices := settingsVoices(draft, settings)
+		voiceID, enabled := voices[accent]
+		if !enabled || voiceID == "" {
+			return conflict("该口音已经关闭")
+		}
+		if !ai.ValidVoice(selected.ID, voiceID) {
+			return bad("该模型不支持当前音色")
+		}
+
+		var audioItem model.TextbookAudioItem
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("draft_id=? AND page=? AND item_id=? AND accent=? AND active=1", id, page, itemID, accent).
+			First(&audioItem).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			audioItem = model.TextbookAudioItem{
+				DraftID: id, Page: page, ItemID: itemID, SegmentID: contentItem.SegmentID,
+				ItemType: contentItem.Kind, WordIndex: contentItem.WordIndex, Text: contentItem.Text,
+				Context: contentItem.Context, Accent: accent, ModelID: selected.ID,
+				Provider: selected.Provider, VoiceID: voiceID, Status: "pending", Active: true,
+				SourcePageVersion: draftPage.Version, FailureReasons: "[]", Revision: 1,
+			}
+			if err := tx.Create(&audioItem).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+
+		job := model.TextbookJob{
+			DraftID: id, Kind: "audio-item", Page: page, ItemID: itemID, Accent: accent,
+			ModelID: selected.ID, Provider: selected.Provider, VoiceID: voiceID,
+			Status: "queued", Total: 1, Priority: 100,
+		}
+		if err := tx.Create(&job).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&audioItem).Updates(map[string]any{
+			"segment_id": contentItem.SegmentID,
+			"item_type": contentItem.Kind,
+			"word_index": contentItem.WordIndex,
+			"text": contentItem.Text,
+			"context": contentItem.Context,
+			"model_id": selected.ID,
+			"provider": selected.Provider,
+			"voice_id": voiceID,
+			"status": "queued",
+			"active_job_id": job.ID,
+			"candidate_path": "",
+			"failure_reasons": "[]",
+			"qa_score": nil,
+			"reviewed_by": nil,
+			"reviewed_at": nil,
+			"revision": gorm.Expr("revision+1"),
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&draftPage).Updates(map[string]any{
+			"audio_checked": false,
+			"version": gorm.Expr("version+1"),
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&draft).Updates(map[string]any{
+			"status": "draft",
+			"version": gorm.Expr("version+1"),
+			"updated_by": actor,
+		}).Error; err != nil {
+			return err
+		}
+		return editorAudit(tx, actor, "draft.audio.regenerate-item", id, map[string]any{
+			"page": page, "item_id": itemID, "accent": accent, "model_id": selected.ID,
+			"voice_id": voiceID, "job_id": job.ID,
+		})
+	})
+}
+
 func (s *EditorService) RetryAudioIssue(ctx context.Context, id string, page int, itemID, accent, requestedModelID, requestedVoiceID string, version, actor uint64) error {
 	if itemID == "" || (accent != "en-US" && accent != "en-GB") {
 		return bad("音频条目或口音无效")
