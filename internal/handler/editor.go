@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"xiaov2/internal/ai"
@@ -268,12 +270,16 @@ func (h *EditorHandler) UploadAudioItem(c *gin.Context) {
 	if c.Request.MultipartForm != nil {
 		defer c.Request.MultipartForm.RemoveAll()
 	}
-	file, _, err := c.Request.FormFile("file")
+	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		failure(c, http.StatusBadRequest, 40000, "请选择音频文件")
 		return
 	}
 	defer file.Close()
+	if strings.ToLower(filepath.Ext(header.Filename)) != ".wav" {
+		failure(c, http.StatusBadRequest, 40000, "目前只支持 WAV 音频，请先将 MP3/M4A 等格式转换为 WAV")
+		return
+	}
 	tmp, err := os.CreateTemp("", "xiaov2-manual-audio-*")
 	if err != nil {
 		writePlatformError(c, err)
