@@ -550,6 +550,13 @@ func (s *EditorService) UploadSentenceAudio(ctx context.Context, id string, page
 		if locked.Version != version {
 			return conflict("草稿已更新，请刷新")
 		}
+		var running int64
+		if err := tx.Model(&model.TextbookJob{}).Where("draft_id=? AND status IN ?", id, []string{"queued", "running"}).Count(&running).Error; err != nil {
+			return err
+		}
+		if running > 0 {
+			return conflict("当前有生成任务正在执行，请完成后再上传句子音频")
+		}
 		now := time.Now().UTC()
 		for _, row := range rows {
 			if err := tx.Model(&model.TextbookAudioItem{}).Where("id=? AND active=1", row.ID).Updates(map[string]any{
