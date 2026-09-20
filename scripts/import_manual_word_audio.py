@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize a manually uploaded textbook word/phonics audio file to 24 kHz mono PCM16 WAV."""
+"""Normalize a manually uploaded textbook word/phonics/sentence WAV to 24 kHz mono PCM16."""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +35,7 @@ def main() -> None:
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--text", required=True)
+    parser.add_argument("--kind", choices=("word", "sentence"), default="word")
     args = parser.parse_args()
 
     source = Path(args.input)
@@ -55,8 +56,9 @@ def main() -> None:
     duration = len(samples) / sample_rate
     if duration < 0.05:
         raise ValueError("audio is too short")
-    if duration > 8.0:
-        raise ValueError("word audio must be 8 seconds or shorter")
+    maximum = 8.0 if args.kind == "word" else 30.0
+    if duration > maximum:
+        raise ValueError(f"{args.kind} audio must be {maximum:g} seconds or shorter")
 
     peak = float(np.max(np.abs(samples)))
     rms = math.sqrt(float(np.mean(samples * samples)))
