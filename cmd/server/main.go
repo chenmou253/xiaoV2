@@ -43,6 +43,7 @@ func main() {
 	bookService := service.NewBookService(bookRepo, resources)
 	platformService := service.NewPlatformService(repository.NewPlatformRepository(db), cfg)
 	editorService := service.NewEditorService(db, cfg, resources)
+	platformService.SetTTSModelSwitchHook(editorService.ReleaseAudioDaemonForModelSwitch)
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "bootstrap":
