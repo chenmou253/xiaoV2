@@ -82,7 +82,9 @@ func (r *PlatformRepository) ConsumeEmailToken(ctx context.Context, kind, purpos
 				if e := tx.Model(&model.Admin{}).Where("id=?", id).Updates(map[string]any{"password_hash": newHash, "verified": true}).Error; e != nil {
 					return e
 				}
-				tx.Where("account_id=?", id).Delete(&model.AdminSession{})
+				if e := tx.Where("account_id=?", id).Delete(&model.AdminSession{}).Error; e != nil {
+					return e
+				}
 			}
 			return tx.Where("account_id=?", id).Delete(&model.AdminEmailToken{}).Error
 		}
@@ -99,7 +101,9 @@ func (r *PlatformRepository) ConsumeEmailToken(ctx context.Context, kind, purpos
 			if e := tx.Model(&model.Student{}).Where("id=?", id).Updates(map[string]any{"password_hash": newHash, "verified": true}).Error; e != nil {
 				return e
 			}
-			tx.Where("account_id=?", id).Delete(&model.StudentSession{})
+			if e := tx.Where("account_id=?", id).Delete(&model.StudentSession{}).Error; e != nil {
+				return e
+			}
 		}
 		return tx.Where("account_id=?", id).Delete(&model.StudentEmailToken{}).Error
 	})
@@ -129,7 +133,9 @@ func (r *PlatformRepository) ResolveSession(ctx context.Context, kind, raw strin
 			return out, gorm.ErrRecordNotFound
 		}
 		out.ID, out.Email = a.ID, a.Email
-		r.db.WithContext(ctx).Table("admin_roles ar").Select("DISTINCT rp.permission_code").Joins("JOIN role_permissions rp ON rp.role_id=ar.role_id").Where("ar.admin_id=?", a.ID).Order("rp.permission_code").Scan(&out.Permissions)
+		if e := r.db.WithContext(ctx).Table("admin_roles ar").Select("DISTINCT rp.permission_code").Joins("JOIN role_permissions rp ON rp.role_id=ar.role_id").Where("ar.admin_id=?", a.ID).Order("rp.permission_code").Scan(&out.Permissions).Error; e != nil {
+			return out, e
+		}
 		return out, nil
 	}
 	var a model.Student
@@ -274,7 +280,9 @@ func (r *PlatformRepository) SetAdminStatus(ctx context.Context, id uint64, acti
 			return gorm.ErrRecordNotFound
 		}
 		if !active {
-			tx.Where("account_id=?", id).Delete(&model.AdminSession{})
+			if e := tx.Where("account_id=?", id).Delete(&model.AdminSession{}).Error; e != nil {
+				return e
+			}
 		}
 		return audit(tx, actor, "admin.status", stringJSON(id), map[string]bool{"active": active})
 	})
@@ -294,7 +302,9 @@ func (r *PlatformRepository) SetStudentStatus(ctx context.Context, id uint64, ac
 			return gorm.ErrRecordNotFound
 		}
 		if !active {
-			tx.Where("account_id=?", id).Delete(&model.StudentSession{})
+			if e := tx.Where("account_id=?", id).Delete(&model.StudentSession{}).Error; e != nil {
+				return e
+			}
 		}
 		return audit(tx, actor, "student.status", stringJSON(id), map[string]bool{"active": active})
 	})
