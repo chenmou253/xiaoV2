@@ -205,7 +205,7 @@ func (s *EditorService) UploadWordAudio(ctx context.Context, id string, page int
 	matched := make([]model.TextbookAudioItem, 0)
 	pages := map[int]bool{}
 	for _, row := range rows {
-		if normalizeSharedWord(row.Text) == info.NormalizedWord {
+		if normalizeSharedWord(row.Text) == info.NormalizedWord && row.Status != "disabled" {
 			matched = append(matched, row)
 			pages[row.Page] = true
 		}
@@ -255,7 +255,16 @@ func (s *EditorService) UploadWordAudio(ctx context.Context, id string, page int
 			_ = os.Remove(manifestPath)
 		}
 	}
-	if err := os.Rename(normalizedFile, formal); err != nil {
+	staging := formal + ".manual-upload.tmp"
+	_ = os.Remove(staging)
+	if err := copyFile(normalizedFile, staging); err != nil {
+		if hadOldAudio {
+			_ = os.Rename(backup, formal)
+		}
+		return err
+	}
+	if err := os.Rename(staging, formal); err != nil {
+		_ = os.Remove(staging)
 		if hadOldAudio {
 			_ = os.Rename(backup, formal)
 		}
