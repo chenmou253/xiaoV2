@@ -255,6 +255,60 @@ func (h *EditorHandler) RegenerateAudioItem(c *gin.Context) {
 	success(c, gin.H{"ok": true})
 }
 
+func (h *EditorHandler) UploadWordAudio(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
+	if err := c.Request.ParseMultipartForm(12 << 20); err != nil {
+		failure(c, http.StatusBadRequest, 40000, "音频上传失败，文件上限 12MB")
+		return
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40000, "请选择音频文件")
+		return
+	}
+	defer file.Close()
+	tmp, err := os.CreateTemp("", "xiaov2-manual-audio-*")
+	if err != nil {
+		writePlatformError(c, err)
+		return
+	}
+	source := tmp.Name()
+	defer os.Remove(source)
+	if _, err = io.Copy(tmp, io.LimitReader(file, (12<<20)+1)); err != nil {
+		_ = tmp.Close()
+		writePlatformError(c, err)
+		return
+	}
+	if err = tmp.Close(); err != nil {
+		writePlatformError(c, err)
+		return
+	}
+	if info, statErr := os.Stat(source); statErr != nil || info.Size() == 0 || info.Size() > 12<<20 {
+		failure(c, http.StatusBadRequest, 40000, "音频文件为空或超过 12MB")
+		return
+	}
+	version, err := strconv.ParseUint(c.PostForm("version"), 10, 64)
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40000, "草稿版本无效")
+		return
+	}
+	if err = h.service.UploadWordAudio(
+		c.Request.Context(), c.Param("draftId"), p, c.Param("itemId"),
+		c.PostForm("text"), source, version, identity(c).ID,
+	); err != nil {
+		writePlatformError(c, err)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
 func (h *EditorHandler) RetryAudioIssue(c *gin.Context) {
 	p, ok := pageParam(c)
 	if !ok {
