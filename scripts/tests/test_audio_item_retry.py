@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from generate_audio import AudioGenerator, _safe_component
+from generate_audio import AudioGenerator, AudioItem, _safe_component
 
 
 class PassingGate:
@@ -23,6 +23,18 @@ class PassingGate:
 
 
 class AudioItemRetryTest(unittest.TestCase):
+    def test_same_word_uses_one_shared_cache_path_across_book(self):
+        generator = object.__new__(AudioGenerator)
+        first = AudioItem("word", "Hospital", "A hospital.", 3, "p3-s0", "p3-s0-w0", 0, 0, "en-US", "aiden")
+        second = AudioItem("word", "hospital", "The hospital.", 18, "p18-s2", "p18-s2-w4", 2, 4, "en-US", "aiden")
+        first_key = generator._word_cache_key(first)
+        second_key = generator._word_cache_key(second)
+        self.assertEqual(first_key, second_key)
+        _, first_relative = generator._paths(Path("/tmp/tts"), first, "gen-a", first_key)
+        _, second_relative = generator._paths(Path("/tmp/tts"), second, "gen-b", second_key)
+        self.assertEqual(first_relative, second_relative)
+        self.assertEqual(first_relative, Path("word-cache") / first_key[:2] / f"{first_key}.wav")
+
     def test_retry_replaces_only_selected_manifest_entry_and_cleans_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
