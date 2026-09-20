@@ -55,7 +55,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
   const [draggedSegmentID, setDraggedSegmentID] = useState<string | null>(null), [segmentDropIndex, setSegmentDropIndex] = useState<number | null>(null);
   const [inlineSegmentID, setInlineSegmentID] = useState<string | null>(null), [savingInline, setSavingInline] = useState(false), [playing, setPlaying] = useState(""), [audioError, setAudioError] = useState("");
   const [regeneratingAudio, setRegeneratingAudio] = useState("");
-  const [uploadingAudio, setUploadingWordAudio] = useState("");
+  const [uploadingAudio, setUploadingAudio] = useState("");
   const surface = useRef<HTMLDivElement>(null), player = useRef<HTMLAudioElement | null>(null), interactionMoved = useRef(false);
   const activeAccent = availableAccents.includes(accent) ? accent : availableAccents[0] || "en-US";
   const segments = content.segments || [], segment = segments[si], word = segment?.words[wi];
@@ -163,14 +163,14 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
   }
   async function uploadAudio(itemId: string, kind: "sentence" | "word", text: string, file: File) {
     if (!onUploadAudio || uploadingAudio || regeneratingAudio) return;
-    setUploadingWordAudio(itemId);
+    setUploadingAudio(itemId);
     setAudioError("");
     try {
       await onUploadAudio(itemId, kind, text, file);
     } catch (error) {
       setAudioError((error as Error).message || "上传音频失败");
     } finally {
-      setUploadingWordAudio("");
+      setUploadingAudio("");
     }
   }
   function addSegment() {
