@@ -65,3 +65,11 @@
 .audio-setting-status { flex: 0 0 auto; text-align: right; color: #376f61; font-size: 13px; }
 .audio-settings-note { margin: .7rem 0 0; color: #7a8b81; font-size: 12px; }
 @media (max-width: 800px) { .audio-settings-options { grid-template-columns: 1fr; } }
+
+.translation-spelling-alert{margin:10px 0 12px;padding:11px 12px;border:1px solid #d85b4b;border-radius:9px;background:#fff1ee;color:#8e2f25;line-height:1.45}
+.translation-spelling-alert>div{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+.translation-spelling-alert button{border:1px solid #d85b4b;background:#fff;color:#8e2f25}
+.translation-spelling-alert button small{display:block;margin-top:2px;color:#a9574d}
+.editor-box.translation-spelling-review{border:2px solid #d43b2f;background:#ff5c4a33}
+.editor-word-chip button.translation-spelling-review{background:#fff0ed;color:#9b3026;font-weight:700}
+.translation-spelling-word-warning{padding:9px 10px;border-radius:7px;background:#fff0ed;color:#96362c}
