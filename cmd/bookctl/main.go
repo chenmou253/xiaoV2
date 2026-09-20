@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"xiaov2/internal/config"
 	"xiaov2/internal/database"
@@ -44,7 +45,52 @@ type manifest struct {
 	} `json:"pages"`
 }
 
+func runImportPage(args []string) {
+	fs := flag.NewFlagSet("import-page", flag.ExitOnError)
+	draftID := fs.String("draft-id", "", "draft ID")
+	page := fs.Int("page", 0, "source PDF page number")
+	ocrPath := fs.String("ocr", "", "path to raw OCR JSON")
+	contentPath := fs.String("content", "", "path to reviewed page JSON")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if strings.TrimSpace(*draftID) == "" || *page < 1 || strings.TrimSpace(*ocrPath) == "" || strings.TrimSpace(*contentPath) == "" {
+		log.Fatal("usage: go run ./cmd/bookctl import-page --draft-id <id> --page <n> --ocr <ocr.json> --content <page.json>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := database.Open(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+	if err = database.Migrate(db); err != nil {
+		log.Fatal(err)
+	}
+	resources, err := resource.New(cfg.ResourceRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err := service.NewEditorService(db, cfg, resources).ImportPageJSON(
+		context.Background(),
+		*draftID,
+		*page,
+		service.ImportPageJSONInput{OCRPath: *ocrPath, ContentPath: *contentPath},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("imported draft=%s book=%s page=%d\nocr=%s\ncontent=%s\n", result.DraftID, result.BookID, result.Page, result.OCRPath, result.ContentPath)
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "import-page" {
+		runImportPage(os.Args[2:])
+		return
+	}
 	publish := flag.Bool("publish", false, "make the imported book visible on the shelf")
 	flag.Parse()
 	if flag.NArg() == 1 && flag.Arg(0) == "migrate-audio-state" {
@@ -73,7 +119,7 @@ func main() {
 		return
 	}
 	if flag.NArg() != 2 || flag.Arg(0) != "import" {
-		log.Fatal("usage: go run ./cmd/bookctl [--publish] import <book_id> | go run ./cmd/bookctl migrate-audio-state")
+		log.Fatal("usage: go run ./cmd/bookctl [--publish] import <book_id> | go run ./cmd/bookctl migrate-audio-state | go run ./cmd/bookctl import-page --draft-id <id> --page <n> --ocr <ocr.json> --content <page.json>")
 	}
 	bookID := flag.Arg(1)
 	if !resource.ValidBookID(bookID) {
