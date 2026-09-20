@@ -272,7 +272,7 @@ class AudioGenerator:
             "failures": [],
         }
         manifest["model"] = self._model()
-        if mode not in {"replace-page", "missing", "replace-accent", "retry-failed"}:
+        if mode not in {"replace-page", "replace-item", "missing", "replace-accent", "retry-failed"}:
             raise ValueError(f"unsupported audio generation mode: {mode}")
         if voices is None:
             voices = {
@@ -324,9 +324,11 @@ class AudioGenerator:
                   "total": len(items), "passed": 0, "failed": 0})
         for index, item in enumerate(items, 1):
             word_cache_key = self._word_cache_key(item)
-            reusable = self._reusable_word(
-                manifest, output, word_cache_key, normalized_word(item.text),
-            )
+            reusable = None
+            if mode != "replace-item":
+                reusable = self._reusable_word(
+                    manifest, output, word_cache_key, normalized_word(item.text),
+                )
             if reusable is not None:
                 reusable = self._promote_reusable_word(
                     output, reusable, word_cache_key,
@@ -368,6 +370,12 @@ class AudioGenerator:
                       "total": len(items), "passed": summary["passed"],
                       "failed": summary["failed"], "reused": summary["reused"]})
                 continue
+            # A word has one canonical audio file for the whole textbook.
+            # Explicit regeneration skips cache *reuse* above, but still writes
+            # back to the same shared word-cache path. temporary.replace()
+            # atomically removes/replaces the previous shared WAV after QA
+            # succeeds, so every existing reference immediately hears the new
+            # pronunciation without creating per-item duplicates.
             final_path, relative_path = self._paths(
                 output, item, generation_id, word_cache_key,
             )
@@ -480,6 +488,15 @@ class AudioGenerator:
                 last_result["generated_at"] = datetime.now(timezone.utc).isoformat()
                 last_result["status"] = "failed"
                 _atomic_json(debug / f"{generation_id}.json", last_result)
+                if mode == "replace-item":
+                    manifest["items"] = [
+                        current for current in manifest.get("items", [])
+                        if not (
+                            int(current.get("page", 0)) == page
+                            and str(current.get("item_id", "")) == item.item_id
+                            and str(current.get("accent", "")) == item.accent
+                        )
+                    ]
                 manifest["failures"] = [
                     failure for failure in manifest.get("failures", [])
                     if not (
@@ -556,7 +573,7 @@ def main() -> None:
     parser.add_argument("--voice-uk", default="")
     parser.add_argument("--disable-us", action="store_true")
     parser.add_argument("--disable-uk", action="store_true")
-    parser.add_argument("--mode", choices=("replace-page", "missing", "replace-accent", "retry-failed"), default="replace-page")
+    parser.add_argument("--mode", choices=("replace-page", "replace-item", "missing", "replace-accent", "retry-failed"), default="replace-page")
     parser.add_argument("--resource-root", type=Path,
                         default=Path(os.getenv("RESOURCE_ROOT", "storage/books")))
     parser.add_argument("--force", action="store_true",
