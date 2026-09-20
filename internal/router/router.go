@@ -112,6 +112,7 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		admin.GET("/drafts/:draftId/pages/:page", platform.Require("content.read"), editor.Page)
 		admin.GET("/drafts/:draftId/pages/:page/image", platform.Require("content.read"), editor.Image)
 		admin.GET("/drafts/:draftId/pages/:page/audio/:itemId", platform.Require("content.read"), editor.Audio)
+		admin.POST("/drafts/:draftId/pages/:page/audio/:itemId/regenerate", platform.Require("content.write"), editor.RegenerateAudioItem)
 		admin.GET("/drafts/:draftId/pages/:page/audio-issues", platform.Require("content.read"), editor.AudioIssues)
 		admin.GET("/drafts/:draftId/pages/:page/audio-issues/:itemId/failed", platform.Require("content.read"), editor.FailedAudio)
 		admin.POST("/drafts/:draftId/pages/:page/audio-issues/:itemId/retry", platform.Require("content.write"), editor.RetryAudioIssue)
