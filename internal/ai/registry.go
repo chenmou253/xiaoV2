@@ -8,8 +8,9 @@ import (
 const (
 	LocalOCRModel = "local-paddleocr"
 	CloudOCRModel = "qwen3.5-ocr"
-	LocalTTSModel = "local-qwen3-tts"
-	CloudTTSModel = "qwen3-tts-flash"
+	LocalTTSModel    = "local-qwen3-tts"
+	LocalTTS17BModel = "local-qwen3-tts-1.7b"
+	CloudTTSModel    = "qwen3-tts-flash"
 )
 
 type Model struct {
@@ -51,7 +52,8 @@ func Models() []Model {
 	return []Model{
 		{ID: LocalOCRModel, Name: "本地 PaddleOCR", Type: "ocr", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"text", "coordinates", "confidence"}, RetryPolicy: "local-quality-gate"},
 		{ID: CloudOCRModel, Name: "Qwen3.5 OCR", Type: "ocr", Provider: "dashscope", Enabled: true, Cloud: true, Available: hasKey, UnavailableReason: cloudReason, Capabilities: []string{"text", "coordinates", "document-ocr"}, RetryPolicy: "none"},
-		{ID: LocalTTSModel, Name: "本地 Qwen3 TTS", Type: "tts", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"speech", "en-US", "en-GB", "local-qa"}, DefaultVoice: "aiden", RetryPolicy: "local-quality-gate"},
+		{ID: LocalTTSModel, Name: "本地 Qwen3 TTS 0.6B 8bit", Type: "tts", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"speech", "en-US", "en-GB", "local-qa"}, DefaultVoice: "aiden", RetryPolicy: "local-quality-gate"},
+		{ID: LocalTTS17BModel, Name: "本地 Qwen3 TTS 1.7B 8bit", Type: "tts", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"speech", "en-US", "en-GB", "local-qa"}, DefaultVoice: "aiden", RetryPolicy: "local-quality-gate"},
 		{ID: CloudTTSModel, Name: "Qwen3 TTS Flash", Type: "tts", Provider: "dashscope", Enabled: true, Cloud: true, Available: hasKey, UnavailableReason: cloudReason, Capabilities: []string{"speech", "multilingual", "local-qa"}, DefaultVoice: "Aiden", RetryPolicy: "none"},
 	}
 }
@@ -70,9 +72,14 @@ func IsCloud(id string) bool {
 	return ok && item.Cloud
 }
 
+func IsLocalTTS(id string) bool {
+	item, ok := Find(id)
+	return ok && item.Type == "tts" && item.Provider == "local" && !item.Cloud
+}
+
 func Voices(modelID string) []Voice {
 	switch modelID {
-	case LocalTTSModel:
+	case LocalTTSModel, LocalTTS17BModel:
 		return []Voice{
 			{ID: "aiden", Name: "aiden", DisplayName: "Aiden（本地美式）"},
 			{ID: "ryan", Name: "ryan", DisplayName: "Ryan（本地英式）"},
