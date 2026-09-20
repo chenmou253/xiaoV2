@@ -220,7 +220,7 @@ func retryAudioIssueSettings(draft model.TextbookDraft, pageSettings ai.Settings
 	return selected, voiceID, nil
 }
 
-func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page int, itemID, accent string, version, actor uint64) error {
+func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page int, itemID, accent, visibleText string, version, actor uint64) error {
 	if itemID == "" || (accent != "en-US" && accent != "en-GB") {
 		return bad("音频条目或口音无效")
 	}
@@ -257,6 +257,9 @@ func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page
 		contentItem, err := s.lookupAudioContentItem(tx, id, page, itemID)
 		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(visibleText) != strings.TrimSpace(contentItem.Text) {
+			return conflict("当前单词或句子有未保存修改，请先保存本页修改后再单独重新生成音频")
 		}
 
 		settings := pageAudioSettings(draft, draftPage)
