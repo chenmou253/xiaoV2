@@ -1,0 +1,17 @@
+.env
+.DS_Store
+.idea/
+.mysql/
+*.log
+*.ses
+web/node_modules/
+web/dist/
+scripts/__pycache__/
+scripts/common/__pycache__/
+scripts/tests/__pycache__/
+storage/books/*
+!storage/books/.gitkeep
+storage/editor/
+.local/
+.venv/
+.env.example

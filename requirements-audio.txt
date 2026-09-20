@@ -1,0 +1,4 @@
+mlx-audio==0.5.4
+onnxruntime==1.30.0  # faster-whisper CPU runtime; not used by Qwen3-TTS
+soundfile==0.14.0
+faster-whisper==1.2.1

@@ -1,0 +1,1 @@
+"""Shared resource path protocol."""

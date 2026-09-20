@@ -1,0 +1,342 @@
+.job-live {
+  display: inline-block;
+  margin-left: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #e5f5ef;
+  color: #267163;
+  font-size: 12px;
+}
+
+.job-list {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.page-workflow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #eef7f2;
+  color: #246b58;
+}
+
+.page-workflow span {
+  font-size: 13px;
+}
+
+.job-card {
+  border: 1px solid #dce4de;
+  border-radius: 12px;
+  padding: 15px;
+}
+
+.job-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.job-card header span {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #eef2ef;
+  font-size: 12px;
+}
+
+.job-card.running header span {
+  background: #e4f3ef;
+  color: #276e62;
+}
+
+.job-recovery-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fff6f2;
+  color: #7f4034;
+}
+
+.job-recovery-action small {
+  color: #80645e;
+}
+
+.job-kill-restart {
+  border: 1px solid #c65f4c;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  color: #963f31;
+  font-weight: 700;
+}
+
+.job-kill-restart:hover:not(:disabled) {
+  background: #fff0ed;
+}
+
+.job-card.failed {
+  border-color: #efc8c1;
+}
+
+.job-card.failed header span {
+  background: #fff0ed;
+  color: #9b3e31;
+}
+
+.job-card.completed header span {
+  background: #e9f7ed;
+  color: #246b48;
+}
+
+.job-card.issues {
+  border-color: #efc8c1;
+}
+
+.job-card.issues header span {
+  background: #fff0ed;
+  color: #9b3e31;
+}
+
+.job-card progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  margin: 8px 0;
+  accent-color: #317f72;
+}
+
+.job-progress-activity {
+  height: 4px;
+  margin: -4px 0 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e4eee8 0%, #317f72 50%, #e4eee8 100%);
+  background-size: 200% 100%;
+  animation: job-progress 1.2s linear infinite;
+}
+
+.job-card > small {
+  color: #66776d;
+}
+
+.job-indeterminate {
+  height: 9px;
+  margin: 10px 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e4eee8 0%, #317f72 50%, #e4eee8 100%);
+  background-size: 200% 100%;
+  animation: job-progress 1.2s linear infinite;
+}
+
+.job-error {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 9px;
+  background: #fff0ed;
+  color: #863a30;
+}
+
+.job-error p {
+  margin: 8px 0;
+}
+
+.job-error details {
+  margin-top: 8px;
+}
+
+.job-error details > code {
+  display: block;
+  margin-top: 8px;
+  color: #5f302a;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.audio-issue-entry {
+  border-color: #bc4f42;
+  color: #913a30;
+  background: #fff4f1;
+}
+
+.audio-review-home,
+.audio-review-context {
+  border-color: #efc8c1;
+}
+
+.audio-review-context {
+  margin-bottom: 12px;
+}
+
+.audio-review-context h2,
+.audio-review-context p {
+  margin-top: 6px;
+}
+
+.review-queue-list {
+  display: grid;
+  gap: 10px;
+}
+
+.review-queue-list button {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 15px 16px;
+  border: 1px solid #ead9d5;
+  border-radius: 12px;
+  background: white;
+  text-align: left;
+}
+
+.review-queue-list button:hover {
+  border-color: #bc4f42;
+  background: #fff8f6;
+}
+
+.review-queue-list span {
+  color: #687970;
+}
+
+.review-queue-list b {
+  color: #913a30;
+}
+
+.audio-issue-review {
+  margin-top: 18px;
+  padding: 20px;
+  border: 1px solid #efc8c1;
+  border-radius: 14px;
+  background: #fffdfc;
+}
+
+.audio-issue-review > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.audio-issue-review h3,
+.audio-issue-review p {
+  margin-top: 0;
+}
+
+.audio-issue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.audio-issue-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(300px, 1fr);
+  gap: 20px;
+  padding: 16px;
+  border: 1px solid #ead9d5;
+  border-radius: 12px;
+  background: white;
+}
+
+.audio-issue-copy,
+.audio-issue-controls {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.audio-issue-copy > span,
+.audio-issue-copy > small {
+  color: #687970;
+}
+
+.audio-issue-copy ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #913a30;
+}
+
+.audio-issue-controls audio {
+  width: 100%;
+}
+
+.audio-retry-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f4f8f6;
+}
+
+.audio-retry-settings label {
+  display: grid;
+  gap: 4px;
+  color: #38534b;
+  font-size: 13px;
+}
+
+.audio-retry-settings select {
+  min-width: 0;
+}
+
+.audio-retry-settings small {
+  grid-column: 1 / -1;
+  color: #687970;
+}
+
+.audio-issue-success {
+  padding: 16px;
+  border-radius: 10px;
+  background: #e9f7ed;
+  color: #246b48;
+}
+
+.admin-error-inline {
+  color: #913a30;
+}
+
+.admin-toast {
+  position: fixed;
+  top: 20px;
+  right: 24px;
+  z-index: 1000;
+  max-width: min(520px, calc(100vw - 48px));
+  margin: 0;
+  border: 1px solid #b9dcca;
+  box-shadow: 0 12px 32px #183f3a26;
+}
+
+@media (max-width: 800px) {
+  .admin-toast {
+    top: 12px;
+    right: 12px;
+    max-width: calc(100vw - 24px);
+  }
+
+  .audio-issue-review > header,
+  .audio-issue-row,
+  .review-queue-list button {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .audio-retry-settings {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes job-progress {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
