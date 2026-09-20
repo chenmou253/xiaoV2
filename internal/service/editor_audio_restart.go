@@ -41,8 +41,8 @@ func (s *EditorService) restartPageAudio(ctx context.Context, id string, version
 			Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 			return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 		}
-		if !current.Checked || !hasAudioItems(current.Content) {
-			return bad(fmt.Sprintf("请先完成并保存第 %d 页的 OCR 核对", page))
+		if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+			return bad(fmt.Sprintf("第 %d 页暂不能重新生成音频：%s", page, strings.Join(issues, "；")))
 		}
 
 		var active []model.TextbookJob
@@ -109,6 +109,7 @@ func (s *EditorService) restartPageAudio(ctx context.Context, id string, version
 			return e
 		}
 		if e := tx.Model(&current).Updates(map[string]any{
+			"checked":       true,
 			"audio_checked": false,
 			"version":       gorm.Expr("version+1"),
 		}).Error; e != nil {
