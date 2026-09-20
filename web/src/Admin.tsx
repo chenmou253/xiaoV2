@@ -1306,11 +1306,21 @@ function Drafts({
       return;
     }
     await run(async () => {
-      // Persist any visible editor changes first. Full-page replacement is
-      // intentionally allowed even when OCR has not been manually confirmed:
-      // the backend validates the complete content and marks OCR checked.
-      const latest = await savePageReview("", "none", JSON.parse(raw));
-      await action("audio-replace-page", "", latest.draft.version, pageNo);
+      // Page-audio replacement must never call SavePage: a normal page save can
+      // invalidate OCR/page artifacts when content changed. Compare against the
+      // persisted page instead and require an explicit save only when the
+      // editor has unsaved changes.
+      const persisted = await api<any>(`/admin/drafts/${id}/pages/${pageNo}`);
+      let visibleContent: any;
+      try {
+        visibleContent = JSON.parse(raw);
+      } catch {
+        throw new Error("页面 JSON 无效，请先修正并保存");
+      }
+      if (JSON.stringify(persisted.content) !== JSON.stringify(visibleContent)) {
+        throw new Error("当前页有未保存修改，请先保存本页修改；保存后无需重新 OCR，可直接重新生成音频");
+      }
+      await action("audio-replace-page", "", detail.draft.version, pageNo);
       await Promise.all([loadDetail(id, pageNo), loadAudioIssues(id, pageNo)]);
       notice(`第 ${pageNo} 页 OCR 数据有效，旧音频已清除并重新生成本页全部音频`);
     });
