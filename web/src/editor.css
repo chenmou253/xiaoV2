@@ -77,3 +77,9 @@
 .editor-box.translation-spelling-review{border:2px solid #d43b2f;background:#ff5c4a33}
 .editor-word-chip button.translation-spelling-review{background:#fff0ed;color:#9b3026;font-weight:700}
 .translation-spelling-word-warning{padding:9px 10px;border-radius:7px;background:#fff0ed;color:#96362c}
+
+.editor-audio-upload-button{display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;border:1px solid #6d7c78;border-radius:4px;background:#fff;color:#294b45;font-size:12px;font-weight:600;cursor:pointer}
+.editor-audio-upload-button:hover{background:#f2f7f5}
+.editor-audio-upload-button:has(input:disabled){opacity:.55;cursor:not-allowed}
+.editor-audio-upload-button input{display:none}
+.editor-audio-upload-note{flex-basis:100%;color:#647b73;font-size:11px;line-height:1.45}
