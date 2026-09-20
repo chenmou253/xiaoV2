@@ -45,6 +45,18 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 	if err := s.ensureDraftAudioState(ctx, id); err != nil {
 		return err
 	}
+	var current model.TextbookDraft
+	if err := s.db.WithContext(ctx).First(&current, "id=?", id).Error; err != nil {
+		return err
+	}
+	currentSettings := draftModelSettings(current)
+	if currentSettings.TTSModel != settings.TTSModel {
+		// Release an idle resident model immediately. The transaction below
+		// still performs the authoritative queued/running job check.
+		if err := s.ReleaseAudioDaemonForModelSwitch(currentSettings.TTSModel, settings.TTSModel); err != nil {
+			return err
+		}
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var draft model.TextbookDraft
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&draft, "id=?", id).Error; err != nil {
