@@ -1260,6 +1260,28 @@ function Drafts({
     notice(message);
     return latest;
   }
+  async function regenerateAudioItem(itemID: string, accent: "en-US" | "en-GB", kind: "sentence" | "word", text: string) {
+    if (!detail || !page || processing) return;
+    const label = kind === "sentence" ? "整句" : "单词";
+    const accentLabel = accent === "en-US" ? "美音" : "英音";
+    const ok = await runResult(async () => {
+      // Persist the editor first so the TTS worker always reads exactly the
+      // text currently visible in this page editor. If content changed, the
+      // existing page audio is invalidated by SavePage before this one item is
+      // queued, preserving the normal consistency rules.
+      const latest = await savePageReview("", "none", page.content);
+      await api(`/admin/drafts/${encodeURIComponent(id)}/pages/${pageNo}/audio/${encodeURIComponent(itemID)}/regenerate`, {
+        method: "POST",
+        body: JSON.stringify({ accent, version: latest.draft.version }),
+      });
+      await Promise.all([loadDetail(id, pageNo), loadAudioIssues(id, pageNo)]);
+      notice(`${label}“${text}”的${accentLabel}已进入单项重新生成队列`);
+    });
+    if (!ok) {
+      throw new Error("单项音频重新生成失败");
+    }
+  }
+
   async function queueAudio() {
     if (!audioRequired) {
       notice("当前草稿已关闭所有发音，本页只确认 OCR，不会生成音频");
@@ -1814,6 +1836,7 @@ function Drafts({
                         throw new Error("片段保存失败，请修正错误后重试");
                       }
                     }}
+                    onRegenerateAudio={regenerateAudioItem}
                   />
                   <label>
                     页面 JSON
