@@ -35,12 +35,17 @@ func conflict(message string) *AppError { return &AppError{409, 40900, message} 
 func notFound(message string) *AppError { return &AppError{404, 40400, message} }
 
 type PlatformService struct {
-	repo *repository.PlatformRepository
-	cfg  config.Config
+	repo           *repository.PlatformRepository
+	cfg            config.Config
+	ttsModelSwitch func(oldModel, newModel string) error
 }
 
 func NewPlatformService(repo *repository.PlatformRepository, cfg config.Config) *PlatformService {
 	return &PlatformService{repo: repo, cfg: cfg}
+}
+
+func (s *PlatformService) SetTTSModelSwitchHook(hook func(oldModel, newModel string) error) {
+	s.ttsModelSwitch = hook
 }
 func normalizeEmail(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -297,6 +302,10 @@ func (s *PlatformService) ModelSettings(ctx context.Context) (ai.Settings, error
 }
 func (s *PlatformService) SaveModelSettings(ctx context.Context, value ai.Settings, actor uint64) error {
 	value = ai.NormalizeSettings(value)
+	current, err := s.repo.ModelSettings(ctx)
+	if err != nil {
+		return err
+	}
 	ocr, ok := ai.Find(value.OCRModel)
 	if !ok || ocr.Type != "ocr" || !ocr.Enabled {
 		return bad("OCR 模型无效")
@@ -313,6 +322,11 @@ func (s *PlatformService) SaveModelSettings(ctx context.Context, value ai.Settin
 	}
 	if !ai.ValidVoice(value.TTSModel, value.TTSVoice) {
 		return bad("TTS 音色不属于所选模型")
+	}
+	if current.TTSModel != value.TTSModel && s.ttsModelSwitch != nil {
+		if err := s.ttsModelSwitch(current.TTSModel, value.TTSModel); err != nil {
+			return err
+		}
 	}
 	return s.repo.SaveModelSettings(ctx, value, actor)
 }
