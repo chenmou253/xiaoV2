@@ -194,7 +194,7 @@ func retryAudioIssueSettings(draft model.TextbookDraft, pageSettings ai.Settings
 		voiceID = item.VoiceID
 	}
 	if voiceID == "" {
-		if selected.ID == ai.LocalTTSModel {
+		if ai.IsLocalTTS(selected.ID) {
 			if accent == tts.AccentGB {
 				voiceID = tts.DefaultBritishVoice
 			} else {
@@ -207,7 +207,7 @@ func retryAudioIssueSettings(draft model.TextbookDraft, pageSettings ai.Settings
 	if !ai.ValidVoice(selected.ID, voiceID) {
 		return ai.Model{}, "", bad("该模型不支持所选音色")
 	}
-	if selected.ID == ai.LocalTTSModel {
+	if ai.IsLocalTTS(selected.ID) {
 		expected := tts.DefaultAmericanVoice
 		if accent == tts.AccentGB {
 			expected = tts.DefaultBritishVoice
