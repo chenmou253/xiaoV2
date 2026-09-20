@@ -10,8 +10,19 @@ from pathlib import Path
 from typing import Protocol
 
 from common.dashscope_client import DashScopeClient, DashScopeError
-from common.qwen_tts_mlx import QwenTTSMLXEngine
+from common.qwen_tts_mlx import QwenTTSConfig, QwenTTSMLXEngine
 
+
+LOCAL_QWEN_MODELS = {
+    "local-qwen3-tts": os.getenv(
+        "TTS_MODEL_06B",
+        os.getenv("TTS_MODEL", "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"),
+    ),
+    "local-qwen3-tts-1.7b": os.getenv(
+        "TTS_MODEL_17B",
+        "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+    ),
+}
 
 CLOUD_VOICES = {
     "Serena", "Ethan", "Chelsie", "Momo", "Vivian", "Moon", "Maia", "Kai",
@@ -59,12 +70,14 @@ class TTSProvider(Protocol):
                    retry_variant: int, voice: str): ...
 
 class LocalQwenTTSProvider:
-    model_id = "local-qwen3-tts"
     cloud = False
     retry_policy = "local-quality-gate"
 
-    def __init__(self) -> None:
-        self.engine = QwenTTSMLXEngine()
+    def __init__(self, model_id: str = "local-qwen3-tts") -> None:
+        if model_id not in LOCAL_QWEN_MODELS:
+            raise ValueError(f"unsupported local TTS model: {model_id}")
+        self.model_id = model_id
+        self.engine = QwenTTSMLXEngine(QwenTTSConfig(model=LOCAL_QWEN_MODELS[model_id]))
         self.supported_speakers = set(self.engine.supported_speakers)
 
     def synthesize(self, text: str, kind: str, accent: str, attempt: int,
@@ -125,8 +138,8 @@ class QwenFlashTTSProvider:
         return samples, sample_rate, generation
 
 def create_tts_provider(model_id: str) -> TTSProvider:
-    if model_id == LocalQwenTTSProvider.model_id:
-        return LocalQwenTTSProvider()
+    if model_id in LOCAL_QWEN_MODELS:
+        return LocalQwenTTSProvider(model_id)
     if model_id == QwenFlashTTSProvider.model_id:
         return QwenFlashTTSProvider()
     raise ValueError(f"unsupported TTS model: {model_id}")
