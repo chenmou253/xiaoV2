@@ -57,6 +57,41 @@ func NewEditorService(db *gorm.DB, cfg config.Config, r *resource.Manager) *Edit
 	return &EditorService{db: db, cfg: cfg, resources: r}
 }
 
+const daemonInactivityTimeout = 15 * time.Minute
+
+type daemonScanResult struct {
+	line []byte
+	err  error
+}
+
+func scanDaemonLine(ctx context.Context, scanner *bufio.Scanner, stop func(), name string) ([]byte, error) {
+	result := make(chan daemonScanResult, 1)
+	go func() {
+		if scanner.Scan() {
+			result <- daemonScanResult{line: append([]byte(nil), scanner.Bytes()...)}
+			return
+		}
+		if err := scanner.Err(); err != nil {
+			result <- daemonScanResult{err: err}
+			return
+		}
+		result <- daemonScanResult{err: io.EOF}
+	}()
+
+	timer := time.NewTimer(daemonInactivityTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		stop()
+		return nil, ctx.Err()
+	case <-timer.C:
+		stop()
+		return nil, fmt.Errorf("%s daemon produced no output for %s", name, daemonInactivityTimeout)
+	case scanned := <-result:
+		return scanned.line, scanned.err
+	}
+}
+
 type DraftSummary struct {
 	model.TextbookDraft
 	PageCount int64 `json:"page_count"`
@@ -737,7 +772,9 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 		if d.Status == "failed" {
 			updates["status"] = "draft"
 		}
-		tx.Model(&d).Updates(updates)
+		if e := tx.Model(&d).Updates(updates).Error; e != nil {
+			return e
+		}
 		return editorAudit(tx, actor, "draft.page.save", id, map[string]int{"page": pos})
 	})
 }
@@ -1492,7 +1529,7 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 	} else {
 		job.Progress = job.Total
 	}
-	_ = s.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+	finalizeErr := s.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&model.TextbookJob{}).Where("id=? AND status='running'", job.ID).
 			Updates(map[string]any{"status": status, "error": msg, "progress": job.Progress, "request_id": job.RequestID, "finished_at": time.Now()})
 		if result.Error != nil {
@@ -1520,6 +1557,13 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 		}
 		return tx.Model(&model.TextbookDraft{}).Where("id=?", job.DraftID).Updates(map[string]any{"status": ds, "version": gorm.Expr("version+1")}).Error
 	})
+	if finalizeErr != nil {
+		finalizeErr = fmt.Errorf("finalize job %d: %w", job.ID, finalizeErr)
+		if runErr != nil {
+			return true, errors.Join(runErr, finalizeErr)
+		}
+		return true, finalizeErr
+	}
 	return true, runErr
 }
 func (s *EditorService) convert(ctx context.Context, job *model.TextbookJob) error {
@@ -1726,7 +1770,14 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 		s.stopAudioDaemon()
 		return e
 	}
-	for audioOut.Scan() {
+	for {
+		line, e := scanDaemonLine(ctx, audioOut, s.stopAudioDaemon, "audio")
+		if e != nil {
+			if errors.Is(e, io.EOF) {
+				e = errors.New("audio worker exited unexpectedly")
+			}
+			return e
+		}
 		var event struct {
 			Event     string          `json:"event"`
 			Progress  int             `json:"progress"`
@@ -1736,7 +1787,7 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 			RequestID string          `json:"request_id"`
 			Done      bool            `json:"done"`
 		}
-		if json.Unmarshal(audioOut.Bytes(), &event) != nil {
+		if json.Unmarshal(line, &event) != nil {
 			continue
 		}
 		if len(event.QA) > 0 {
@@ -1767,18 +1818,7 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 			}
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 	}
-	e := audioOut.Err()
-	s.stopAudioDaemon()
-	if e == nil {
-		e = errors.New("audio worker exited unexpectedly")
-	}
-	return e
 }
 
 func (s *EditorService) stopAudioDaemon() {
@@ -1891,7 +1931,14 @@ func (s *EditorService) runOCRDaemon(ctx context.Context, job *model.TextbookJob
 		s.stopOCRDaemon()
 		return e
 	}
-	for s.ocrOut.Scan() {
+	for {
+		line, e := scanDaemonLine(ctx, s.ocrOut, s.stopOCRDaemon, "OCR")
+		if e != nil {
+			if errors.Is(e, io.EOF) {
+				e = errors.New("OCR worker exited unexpectedly")
+			}
+			return e
+		}
 		var event struct {
 			Page      int    `json:"page"`
 			Progress  int    `json:"progress"`
@@ -1901,7 +1948,7 @@ func (s *EditorService) runOCRDaemon(ctx context.Context, job *model.TextbookJob
 			RequestID string `json:"request_id"`
 			Done      bool   `json:"done"`
 		}
-		if json.Unmarshal(s.ocrOut.Bytes(), &event) != nil {
+		if json.Unmarshal(line, &event) != nil {
 			continue
 		}
 		if event.Error != "" {
@@ -1919,12 +1966,6 @@ func (s *EditorService) runOCRDaemon(ctx context.Context, job *model.TextbookJob
 			return nil
 		}
 	}
-	e := s.ocrOut.Err()
-	s.stopOCRDaemon()
-	if e == nil {
-		e = errors.New("OCR worker exited unexpectedly")
-	}
-	return e
 }
 
 func (s *EditorService) stopOCRDaemon() {
