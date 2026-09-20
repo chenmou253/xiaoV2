@@ -882,6 +882,18 @@ func (s *EditorService) Reorder(ctx context.Context, id string, positions []int,
 		return editorAudit(tx, actor, "draft.reorder", id, positions)
 	})
 }
+func pageAudioRegenerationIssues(raw string) []string {
+	var content map[string]any
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return []string{"页面 JSON 无效"}
+	}
+	issues := publicationIssues(content)
+	if !hasAudioItems(raw) {
+		issues = append(issues, "没有可朗读的 OCR 内容")
+	}
+	return issues
+}
+
 func (s *EditorService) Action(ctx context.Context, id, action, note string, version, actor uint64, page int) error {
 	if action == "audio-restart-page" {
 		return s.restartPageAudio(ctx, id, version, actor, page)
@@ -894,7 +906,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 		if d.Version != version {
 			return conflict("草稿已更新，请刷新")
 		}
-		allowed := map[string][]string{"submit": {"draft"}, "approve": {"in_review"}, "reject": {"in_review", "approved"}, "withdraw": {"in_review", "approved"}, "publish": {"approved"}, "retry": {"failed"}, "translate": {"draft"}, "audio": {"draft"}, "audio-replace-page": {"draft"}, "audio-missing": {"draft"}, "audio-regenerate-us": {"draft"}, "audio-regenerate-uk": {"draft"}, "audio-retry-failed": {"draft"}, "next-page": {"draft"}, "reocr": {"draft", "failed"}}
+		allowed := map[string][]string{"submit": {"draft"}, "approve": {"in_review"}, "reject": {"in_review", "approved"}, "withdraw": {"in_review", "approved"}, "publish": {"approved"}, "retry": {"failed"}, "translate": {"draft"}, "audio": {"draft"}, "audio-replace-page": {"draft", "failed"}, "audio-missing": {"draft"}, "audio-regenerate-us": {"draft"}, "audio-regenerate-uk": {"draft"}, "audio-retry-failed": {"draft"}, "next-page": {"draft"}, "reocr": {"draft", "failed"}}
 		ok := false
 		for _, st := range allowed[action] {
 			if d.Status == st {
@@ -1011,13 +1023,8 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 					return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 				}
 			}
-			var content map[string]any
-			_ = json.Unmarshal([]byte(current.Content), &content)
-			if issues := publicationIssues(content); len(issues) > 0 {
-				return bad(fmt.Sprintf("第 %d 页 OCR/翻译/音标仍有待处理内容，请修正后再重新生成音频", current.Position))
-			}
-			if !hasAudioItems(current.Content) {
-				return bad(fmt.Sprintf("第 %d 页没有可朗读的 OCR 内容，可直接审核通过", current.Position))
+			if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+				return bad(fmt.Sprintf("第 %d 页暂不能生成音频：%s", current.Position, strings.Join(issues, "；")))
 			}
 			if !s.missingDraftAudio(d, current) {
 				return conflict(fmt.Sprintf("第 %d 页已启用的发音音频已生成，请直接试听确认", current.Position))
@@ -1044,13 +1051,8 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 				return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 			}
-			var content map[string]any
-			_ = json.Unmarshal([]byte(current.Content), &content)
-			if !current.Checked || len(publicationIssues(content)) > 0 {
-				return bad(fmt.Sprintf("请先完成并保存第 %d 页的 OCR 核对", current.Position))
-			}
-			if !hasAudioItems(current.Content) {
-				return bad(fmt.Sprintf("第 %d 页没有可朗读的 OCR 内容", current.Position))
+			if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+				return bad(fmt.Sprintf("第 %d 页暂不能重新生成音频：%s", current.Position, strings.Join(issues, "；")))
 			}
 			var active int64
 			if e := tx.Model(&model.TextbookJob{}).Where("draft_id=? AND status IN ?", id, []string{"queued", "running"}).Count(&active).Error; e != nil {
