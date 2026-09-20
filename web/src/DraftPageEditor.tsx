@@ -26,6 +26,7 @@ const clampRange = (value: number, min: number, max: number) => Math.max(min, Ma
 const CLICK_MOVE_THRESHOLD = 0.01;
 const uid = () => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 const audioMode = (segment: Segment): AudioMode => segment.audio_mode || "sentence_and_words";
+const hasSpellingErrorHint = (word: Word) => /拼写(?:错误|有误)/.test(word.meaning || "");
 const anchorWithSize = (anchor?: Anchor): [number, number, number, number] => anchor?.length === 4 ? [...anchor] : [anchor?.[0] ?? 0.45, anchor?.[1] ?? 0.45, 0.03, 0.03];
 const boundedAnchor = (anchor?: Anchor): [number, number, number, number] => {
   const [x, y, width, height] = anchorWithSize(anchor);
@@ -56,6 +57,11 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
   const segments = content.segments || [], segment = segments[si], word = segment?.words[wi];
   const inlineSegment = inlineSegmentID ? segments.find((item) => item.id === inlineSegmentID) : null;
   const inlineIndex = inlineSegment ? segments.findIndex((item) => item.id === inlineSegment.id) : -1;
+  const spellingErrorWords = segments.flatMap((item, segmentIndex) =>
+    item.words.flatMap((current, wordIndex) =>
+      hasSpellingErrorHint(current) ? [{ segmentIndex, wordIndex, word: current }] : [],
+    ),
+  );
 
   function setSegments(next: Segment[]) { onChange({ ...content, segments: next }); }
   function updateSegment(index: number, patch: Partial<Segment>) {
@@ -245,6 +251,10 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
 
   return <div className="visual-editor">
     <div className="action-row"><button type="button" onClick={() => setZoom(!zoom)}>{zoom ? "适应宽度" : "放大原图"}</button>{availableAccents.length > 1 && <label className="editor-accent-select">试听口音<select value={activeAccent} onChange={(e) => { stop(); setAudioError(""); setAccent(e.target.value as Accent); }}><option value="en-US">美式</option><option value="en-GB">英式</option></select></label>}{playing && <span className="editor-playing">正在播放，点击当前热区停止</span>}{audioError && <span className="editor-audio-error">{audioError}</span>}</div>
+    {spellingErrorWords.length > 0 && <section className="translation-spelling-alert" role="alert" aria-live="polite">
+      <strong>翻译模型提示 {spellingErrorWords.length} 个单词可能存在拼写错误，请逐个核对：</strong>
+      <div>{spellingErrorWords.map(({ segmentIndex, wordIndex, word: current }) => <button type="button" key={`${segments[segmentIndex].id}:${current.id}`} onClick={() => { setSI(segmentIndex); setWI(wordIndex); }}>{current.text || "空单词"} <small>{current.meaning}</small></button>)}</div>
+    </section>}
     <p className="editor-canvas-help">在原图空白处拖拽框选即可新增片段；拖动喇叭可移动整句，拖动橙色角块可调整整句范围。</p>
     <div className="editor-canvas-scroll"><div ref={surface} className={`editor-canvas ${zoom ? "zoom" : ""}`} onPointerDown={beginDraw} onPointerMove={move} onPointerUp={finishPointer} onPointerCancel={finishPointer}>
       <img src={image} alt="教材原图" draggable={false} />
@@ -252,7 +262,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       {segments.map((item, x) => { const anchor = boundedAnchor(item.anchor), selected = x === si; return <div key={item.id}>
         {selected && <div className="editor-segment-outline" style={{ left: `${anchor[0] * 100}%`, top: `${anchor[1] * 100}%`, width: `${anchor[2] * 100}%`, height: `${anchor[3] * 100}%` }} />}
         {selected && editable && <span className="editor-resize editor-segment-resize" title="拖动调整整句范围" style={{ left: `${(anchor[0] + anchor[2]) * 100}%`, top: `${(anchor[1] + anchor[3]) * 100}%` }} onPointerDown={(e) => begin(e, "anchor-size", x)} />}
-        {item.words.map((current, y) => current.box && <button type="button" key={current.id} className={`editor-box ${selected && y === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${playing === current.id ? " playing" : ""}`} style={{ left: `${current.box[0] * 100}%`, top: `${current.box[1] * 100}%`, width: `${current.box[2] * 100}%`, height: `${current.box[3] * 100}%` }} onPointerDown={(e) => begin(e, "box", x, y, audioMode(item) === "none" ? undefined : current.id)} onClick={(e) => { if (audioMode(item) !== "none" && (!editable || e.detail === 0)) clickAudio(current.id); }} aria-label={audioMode(item) === "none" ? `选择 ${current.text || "单词"}` : `点读 ${current.text || "单词"}`}>
+        {item.words.map((current, y) => current.box && <button type="button" key={current.id} className={`editor-box ${selected && y === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${hasSpellingErrorHint(current) ? " translation-spelling-review" : ""}${playing === current.id ? " playing" : ""}`} style={{ left: `${current.box[0] * 100}%`, top: `${current.box[1] * 100}%`, width: `${current.box[2] * 100}%`, height: `${current.box[3] * 100}%` }} onPointerDown={(e) => begin(e, "box", x, y, audioMode(item) === "none" ? undefined : current.id)} onClick={(e) => { if (audioMode(item) !== "none" && (!editable || e.detail === 0)) clickAudio(current.id); }} aria-label={audioMode(item) === "none" ? `选择 ${current.text || "单词"}` : `点读 ${current.text || "单词"}`}>
           {selected && y === wi && <span className="editor-overlay-delete word-delete" role="button" title="删除单词" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeWordAt(x, y); }}>×</span>}
           {selected && y === wi && <span className="editor-resize" onPointerDown={(e) => begin(e, "size", x, y)} />}
         </button>)}
@@ -306,7 +316,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
           const dropBefore = wordDropIndex === index, dropAfter = wordDropIndex === segment.words.length && index === segment.words.length - 1;
           return <span className={`editor-word-chip${draggedWord?.wordID === current.id ? " dragging" : ""}${dropBefore ? " drop-before" : ""}${dropAfter ? " drop-after" : ""}`} draggable={editable} key={current.id} onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", current.id); setDraggedWord({ segmentID: segment.id, wordID: current.id }); setWordDropIndex(index); }} onDragOver={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; setWordDropIndex(wordDropPosition(e, index)); }} onDrop={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.stopPropagation(); reorderWord(si, wordDropPosition(e, index)); finishWordDrag(); }} onDragEnd={finishWordDrag} title="拖拽调整单词顺序">
             <span className="editor-word-drag-handle" aria-hidden="true">⠿</span>
-            <button type="button" className={`${index === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}`} onClick={() => setWI(index)}>{current.text || "新单词"}</button>
+            <button type="button" className={`${index === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${hasSpellingErrorHint(current) ? "translation-spelling-review" : ""}`} onClick={() => setWI(index)}>{current.text || "新单词"}{hasSpellingErrorHint(current) ? " ⚠" : ""}</button>
           </span>;
         })}
         <button type="button" className="editor-add-word" onDragOver={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); setWordDropIndex(segment.words.length); }} onDrop={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.stopPropagation(); reorderWord(si, segment.words.length); finishWordDrag(); }} onClick={addSelectedWord}>＋单词</button>
@@ -314,6 +324,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       <p className="editor-words-help">点击“＋单词”会插入到当前单词后；拖拽单词左侧标记可调整顺序。</p>
       {word && <>
         {typeof word.ocr_confidence === "number" && <p className={word.ocr_needs_review ? "ocr-confidence review" : "ocr-confidence"}>PaddleOCR 置信度：{Math.round(word.ocr_confidence * 100)}%{word.ocr_needs_review ? " · 建议人工核对" : ""}</p>}
+        {hasSpellingErrorHint(word) && <p className="translation-spelling-word-warning"><strong>⚠ 翻译模型提示拼写错误</strong>：请核对英文、词义和音标。当前返回：{word.meaning}</p>}
         <div className="form-grid"><label>英文<input value={word.text} onChange={(e) => updateWord(si, wi, { text: e.target.value })} /></label><label>词义<input value={word.meaning || ""} onChange={(e) => updateWord(si, wi, { meaning: e.target.value })} /></label><label>音标<input value={word.phonetic || ""} onChange={(e) => updateWord(si, wi, { phonetic: e.target.value })} /></label></div>
         <div className="coordinate-grid">{["左", "上", "宽", "高"].map((label, index) => <label key={label}>{label}%<input type="number" min="0" max="100" step="0.1" value={Number(((word.box?.[index] || 0) * 100).toFixed(2))} onChange={(e) => { const box = [...(word.box || [0.1, 0.1, 0.08, 0.03])] as [number, number, number, number]; box[index] = Number(e.target.value) / 100; updateWord(si, wi, { box }); }} /></label>)}</div>
         <button type="button" onClick={() => removeWordAt(si, wi)}>删除单词</button>
