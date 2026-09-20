@@ -80,7 +80,31 @@ func (s *EditorService) normalizeManualWordAudio(ctx context.Context, source, te
 
 func updateManualWordManifest(manifest *audioManifest, rows []model.TextbookAudioItem, normalized, relative, generation string, actor uint64, info manualWordAudioInfo) {
 	now := time.Now().UTC().Format(time.RFC3339)
+	manualQA := func() map[string]any {
+		return map[string]any{
+			"passed": true, "manual_upload": true, "basic_validation_only": true,
+			"reviewed_by": actor, "reviewed_at": now,
+			"sample_rate": info.SampleRate, "duration_ms": info.DurationMS,
+			"peak": info.Peak, "rms": info.RMS, "clipping_ratio": info.ClippingRatio,
+		}
+	}
 	seen := make(map[string]bool, len(rows))
+	// First update every historical manifest reference for the same normalized
+	// word. This keeps older pages on the same canonical word-cache file even
+	// if their database state predates the current audio-state tables.
+	for _, entry := range manifest.Items {
+		if fmt.Sprint(entry["kind"]) != "word" || normalizeSharedWord(fmt.Sprint(entry["text"])) != normalized {
+			continue
+		}
+		entry["status"] = "ready"
+		entry["file"] = relative
+		entry["word_cache_key"] = info.WordCacheKey
+		entry["generation_id"] = generation
+		entry["generation_version"] = generation
+		entry["generated_at"] = now
+		entry["qa"] = manualQA()
+		seen[manifestEntryKey(entry)] = true
+	}
 	for _, row := range rows {
 		if row.ItemType != "word" || normalizeSharedWord(row.Text) != normalized {
 			continue
@@ -104,12 +128,7 @@ func updateManualWordManifest(manifest *audioManifest, rows []model.TextbookAudi
 			entry["generation_id"] = generation
 			entry["generation_version"] = generation
 			entry["generated_at"] = now
-			entry["qa"] = map[string]any{
-				"passed": true, "manual_upload": true, "basic_validation_only": true,
-				"reviewed_by": actor, "reviewed_at": now,
-				"sample_rate": info.SampleRate, "duration_ms": info.DurationMS,
-				"peak": info.Peak, "rms": info.RMS, "clipping_ratio": info.ClippingRatio,
-			}
+			entry["qa"] = manualQA()
 			found = true
 			break
 		}
@@ -124,19 +143,14 @@ func updateManualWordManifest(manifest *audioManifest, rows []model.TextbookAudi
 				"context": row.Context, "accent": row.Accent, "voice": row.VoiceID,
 				"tts_model": row.ModelID, "status": "ready", "file": relative,
 				"word_cache_key": info.WordCacheKey, "generation_id": generation,
-				"generation_version": generation, "generated_at": now,
-				"qa": map[string]any{
-					"passed": true, "manual_upload": true, "basic_validation_only": true,
-					"reviewed_by": actor, "reviewed_at": now,
-					"sample_rate": info.SampleRate, "duration_ms": info.DurationMS,
-					"peak": info.Peak, "rms": info.RMS, "clipping_ratio": info.ClippingRatio,
-				},
+				"generation_version": generation, "generated_at": now, "qa": manualQA(),
 			})
 		}
 	}
 	filteredFailures := make([]map[string]any, 0, len(manifest.Failures))
 	for _, failure := range manifest.Failures {
-		if !seen[manifestEntryKey(failure)] {
+		sameWord := normalizeSharedWord(fmt.Sprint(failure["text"])) == normalized
+		if !seen[manifestEntryKey(failure)] && !sameWord {
 			filteredFailures = append(filteredFailures, failure)
 		}
 	}
