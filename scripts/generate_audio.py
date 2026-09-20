@@ -17,7 +17,7 @@ from typing import Callable
 
 from common.audio_qa import AudioQAConfig, AudioQualityGate
 from common.paths import validate_book_id
-from common.tts_providers import CLOUD_VOICES, create_tts_provider
+from common.tts_providers import CLOUD_VOICES, LOCAL_QWEN_MODELS, create_tts_provider
 
 ACCENT_VOICE_IDS = {"en-US": "aiden", "en-GB": "ryan"}
 
@@ -514,9 +514,13 @@ def daemon() -> None:
         try:
             request = json.loads(line)
             model_id = str(request.get("model_id") or "local-qwen3-tts")
-            if generator is None or generator.model_id != model_id:
+            if generator is not None and generator.model_id != model_id:
+                raise RuntimeError(
+                    f"MODEL_SWITCH_REQUIRED:{generator.model_id}->{model_id}"
+                )
+            if generator is None:
                 # model_dir remains accepted in the request for Go/API
-                # compatibility. Qwen uses the Hugging Face model cache.
+                # compatibility. A daemon owns exactly one selected model.
                 generator = AudioGenerator(model_id=model_id)
             summary = generator.generate_page(
                 Path(request["resource_root"]), request["book_id"], int(request["page"]),
@@ -542,7 +546,7 @@ def main() -> None:
     parser.add_argument("--book-id", required=True)
     parser.add_argument("--model-dir", type=Path,
                         help="legacy compatibility option; Qwen uses the Hugging Face cache")
-    parser.add_argument("--model-id", choices=("local-qwen3-tts", "qwen3-tts-flash"),
+    parser.add_argument("--model-id", choices=tuple(LOCAL_QWEN_MODELS) + ("qwen3-tts-flash",),
                         default="local-qwen3-tts")
     parser.add_argument("--page", type=int, required=True)
     parser.add_argument("--item-id", default="")
