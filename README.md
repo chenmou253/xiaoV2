@@ -79,6 +79,19 @@ PDF 转换需要本机 Poppler（`pdfinfo`、`pdftoppm`）。每一页先由 `pd
 
 后台实时音频状态保存在 `textbook_audio_items`，每次生成和 QA 历史保存在 `textbook_audio_attempts`；WAV、QA JSONL 和发布兼容的 `manifest.json` 仍保存在文件系统。编辑页、审核队列和任务轮询只查询数据库，不再按音频项重复解析 manifest。历史草稿可执行 `GOCACHE=/tmp/xiaov2-go-cache go run ./cmd/bookctl migrate-audio-state` 幂等回填；服务首次访问尚未迁移的草稿时也会自动回填。
 
+
+人工校对后的单页 OCR/翻译 JSON 可以直接导入已有草稿页。导入会校验 segment/word ID、句子坐标和单词框，拒绝与正在排队/运行的 OCR/TTS 任务并发，并自动重置该页旧音频状态：
+
+```bash
+go run ./cmd/bookctl import-page \
+  --draft-id <draft_id> \
+  --page 32 \
+  --ocr /path/page-032-ocr.json \
+  --content /path/page-032.json
+```
+
+成功后会写入 `storage/editor/{draft_id}/work/{book_id}/ocr/page-NNN.json` 和 `metadata/pages/page-NNN.json`，同时更新 MySQL `textbook_draft_pages.content`，后台刷新即可看到导入内容。
+
 ## API
 
 JSON 响应统一为 `{ "code": 0, "message": "ok", "data": ... }`。主要接口：
