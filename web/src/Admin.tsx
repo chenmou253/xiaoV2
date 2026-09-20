@@ -1942,13 +1942,10 @@ function Drafts({
                         detail.draft.status !== "draft" ||
                         processing ||
                         currentHasIssues ||
-                        (currentReviewed && !audioFreePageNeedsNext) ||
-                        (currentHasOCRContent && !currentIsLast && !allSourcePagesAvailable)
+                        (currentReviewed && !audioFreePageNeedsNext)
                       }
                       title={
-                        currentHasOCRContent && !currentIsLast && !allSourcePagesAvailable
-                          ? "请切换到最新一页后再继续流程"
-                          : currentHasIssues
+                        currentHasIssues
                           ? "请先补全并保存页面中的待完成内容"
                           : currentHasAudioIssues
                             ? `进入异常处理，逐项处理剩余的 ${audioIssues.length} 个失败音频`
@@ -1982,7 +1979,7 @@ function Drafts({
                         } else if (!audioGeneratedForCurrent) {
                           void queueAudio();
                         } else if (!currentAudioReviewed) {
-                          if (sourcePageCount > lastPage) {
+                          if (currentIsLast && sourcePageCount > lastPage) {
                             void queueNextPage();
                           } else {
                             void run(() =>
@@ -2014,7 +2011,7 @@ function Drafts({
                         : !audioGeneratedForCurrent
                           ? `生成本页${enabledAccentLabel}`
                           : !currentAudioReviewed
-                            ? sourcePageCount > lastPage
+                            ? currentIsLast && sourcePageCount > lastPage
                               ? audioRequired
                                 ? `确认${enabledAccentLabel}并生成第 ${lastPage + 1} 页 OCR`
                                 : `确认本页并生成第 ${lastPage + 1} 页 OCR`
