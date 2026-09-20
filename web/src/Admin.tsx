@@ -1296,8 +1296,8 @@ function Drafts({
   }
   async function queuePageAudioReplacement() {
     if (!detail || !audioRequired || !currentHasAudioContent) return;
-    if (!currentOCRReviewed) {
-      notice("请先完成并确认本页 OCR，再重新生成音频");
+    if (currentHasIssues) {
+      notice("本页 OCR/翻译/音标仍有待处理内容，请修正后再重新生成音频");
       return;
     }
     if (
@@ -1308,10 +1308,13 @@ function Drafts({
       return;
     }
     await run(async () => {
-      const latest = await savePageReview("", "ocr");
+      // Persist any visible editor changes first. Full-page replacement is
+      // intentionally allowed even when OCR has not been manually confirmed:
+      // the backend validates the complete content and marks OCR checked.
+      const latest = await savePageReview("", "none", JSON.parse(raw));
       await action("audio-replace-page", "", latest.draft.version, pageNo);
       await Promise.all([loadDetail(id, pageNo), loadAudioIssues(id, pageNo)]);
-      notice(`第 ${pageNo} 页旧音频和失败候选已清除，重新生成任务已排队`);
+      notice(`第 ${pageNo} 页 OCR 数据有效，旧音频已清除并重新生成本页全部音频`);
     });
   }
   async function terminateAndRestartPageAudio() {
@@ -1890,14 +1893,15 @@ function Drafts({
                           !editableDraft ||
                           detail.draft.status !== "draft" ||
                           processing ||
-                          currentHasIssues ||
-                          !currentOCRReviewed
+                          currentHasIssues
                         }
                         onClick={() => void queuePageAudioReplacement()}
                         title={
-                          !currentOCRReviewed
-                            ? "请先完成并确认本页 OCR"
-                            : "清除本页全部正式音频和失败候选后重新生成，不影响其他页面"
+                          currentHasIssues
+                            ? "请先修正本页 OCR/翻译/音标中的实际问题"
+                            : currentOCRReviewed
+                              ? "清除本页全部正式音频和失败候选后重新生成，不影响 OCR 和其他页面"
+                              : "OCR 数据完整，无需重新 OCR；点击后自动确认 OCR 并重新生成本页全部音频"
                         }
                       >
                         清除旧音频并重新生成本页
