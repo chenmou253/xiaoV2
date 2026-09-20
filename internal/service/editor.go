@@ -1013,8 +1013,8 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			}
 			var content map[string]any
 			_ = json.Unmarshal([]byte(current.Content), &content)
-			if !current.Checked || len(publicationIssues(content)) > 0 {
-				return bad(fmt.Sprintf("请先完成并保存第 %d 页的 OCR 核对", current.Position))
+			if issues := publicationIssues(content); len(issues) > 0 {
+				return bad(fmt.Sprintf("第 %d 页 OCR/翻译/音标仍有待处理内容，请修正后再重新生成音频", current.Position))
 			}
 			if !hasAudioItems(current.Content) {
 				return bad(fmt.Sprintf("第 %d 页没有可朗读的 OCR 内容，可直接审核通过", current.Position))
@@ -1065,9 +1065,10 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if e := s.clearDraftPageAudioArtifacts(d.ID, d.BookID, page); e != nil {
 				return e
 			}
-			if e := tx.Model(&current).Updates(map[string]any{"audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			if e := tx.Model(&current).Updates(map[string]any{"checked": true, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
+			current.Checked = true
 			current.AudioChecked = false
 			current.Version++
 			if e := s.syncPageAudioState(tx, d, current, true); e != nil {
