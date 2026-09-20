@@ -51,7 +51,7 @@ func Load() (Config, error) {
 		WebRoot:       value("WEB_ROOT", "web/dist"),
 		GinMode:       value("GIN_MODE", "release"),
 		AppOrigin:     strings.TrimRight(value("APP_ORIGIN", "http://127.0.0.1:8080"), "/"),
-		DevMailDir:    value("DEV_MAIL_DIR", ".local/mail"),
+		DevMailDir:    valueAllowEmpty("DEV_MAIL_DIR", ".local/mail"),
 		SMTPHost:      strings.TrimSpace(os.Getenv("SMTP_HOST")),
 		SMTPPort:      value("SMTP_PORT", "587"),
 		SMTPUser:      os.Getenv("SMTP_USER"),
@@ -66,6 +66,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("MYSQL_DATABASE is invalid")
 	}
 	for target, ptr := range map[string]*string{"RESOURCE_ROOT": &cfg.ResourceRoot, "WEB_ROOT": &cfg.WebRoot, "DEV_MAIL_DIR": &cfg.DevMailDir, "EDITOR_STORAGE": &cfg.EditorRoot} {
+		if *ptr == "" {
+			continue
+		}
 		if !filepath.IsAbs(*ptr) {
 			*ptr = filepath.Join(cwd, *ptr)
 		}
@@ -123,6 +126,13 @@ func (c Config) DSN() string {
 func value(key, fallback string) string {
 	if current := strings.TrimSpace(os.Getenv(key)); current != "" {
 		return current
+	}
+	return fallback
+}
+
+func valueAllowEmpty(key, fallback string) string {
+	if current, exists := os.LookupEnv(key); exists {
+		return strings.TrimSpace(current)
 	}
 	return fallback
 }
