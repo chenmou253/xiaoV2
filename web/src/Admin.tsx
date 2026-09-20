@@ -1280,7 +1280,7 @@ function Drafts({
     }
   }
 
-  async function uploadWordAudio(itemID: string, text: string, file: File) {
+  async function uploadAudioItem(itemID: string, kind: "sentence" | "word", text: string, file: File) {
     if (!detail || !page || processing) return;
     const ok = await runResult(async () => {
       const form = new FormData();
@@ -1292,10 +1292,12 @@ function Drafts({
         body: form,
       });
       await Promise.all([loadDetail(id, pageNo), loadPage(), loadAudioIssues(id, pageNo)]);
-      notice(`单词“${text}”的人工音频已上传；整本教材同词将共用这条音频`);
+      notice(kind === "word"
+        ? `单词“${text}”的人工音频已上传；整本教材同词将共用这条音频`
+        : `句子“${text}”的人工音频已上传；只替换当前句子`);
     });
     if (!ok) {
-      throw new Error("上传单词音频失败");
+      throw new Error(kind === "word" ? "上传单词音频失败" : "上传句子音频失败");
     }
   }
 
@@ -1867,7 +1869,7 @@ function Drafts({
                       }
                     }}
                     onRegenerateAudio={regenerateAudioItem}
-                    onUploadWordAudio={uploadWordAudio}
+                    onUploadAudio={uploadAudioItem}
                   />
                   <label>
                     页面 JSON
