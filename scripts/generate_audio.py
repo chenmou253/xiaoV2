@@ -370,9 +370,14 @@ class AudioGenerator:
                       "total": len(items), "passed": summary["passed"],
                       "failed": summary["failed"], "reused": summary["reused"]})
                 continue
-            path_cache_key = "" if mode == "replace-item" else word_cache_key
+            # A word has one canonical audio file for the whole textbook.
+            # Explicit regeneration skips cache *reuse* above, but still writes
+            # back to the same shared word-cache path. temporary.replace()
+            # atomically removes/replaces the previous shared WAV after QA
+            # succeeds, so every existing reference immediately hears the new
+            # pronunciation without creating per-item duplicates.
             final_path, relative_path = self._paths(
-                output, item, generation_id, path_cache_key,
+                output, item, generation_id, word_cache_key,
             )
             final_path.parent.mkdir(parents=True, exist_ok=True)
             passed_result: dict | None = None
@@ -458,7 +463,7 @@ class AudioGenerator:
                     "status": "ready",
                     "file": relative_path.as_posix(), "qa": passed_result,
                 }
-                if word_cache_key and mode != "replace-item":
+                if word_cache_key:
                     entry["word_cache_key"] = word_cache_key
                 self._replace_manifest_item(manifest, item, entry)
                 _atomic_json(manifest_path, manifest)
