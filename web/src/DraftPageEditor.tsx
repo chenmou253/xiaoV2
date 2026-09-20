@@ -13,6 +13,7 @@ type Props = {
   onChange: (value: Content) => void;
   onCommit?: (value: Content) => Promise<void> | void;
   onRegenerateAudio?: (itemId: string, accent: Accent, kind: "sentence" | "word", text: string) => Promise<void> | void;
+  onUploadWordAudio?: (itemId: string, text: string, file: File) => Promise<void> | void;
 };
 type Anchor = [number, number] | [number, number, number, number];
 type AudioMode = NonNullable<Segment["audio_mode"]>;
@@ -47,13 +48,14 @@ function wordBoxFor(anchor: Anchor | undefined, index: number, total: number): [
   return [clamp(x + index * (boxWidth + gap), 1 - boxWidth), clamp(y, 1 - boxHeight), boxWidth, boxHeight];
 }
 
-export default function DraftPageEditor({ content, image, draftId, page, editable, availableAccents, onChange, onCommit, onRegenerateAudio }: Props) {
+export default function DraftPageEditor({ content, image, draftId, page, editable, availableAccents, onChange, onCommit, onRegenerateAudio, onUploadWordAudio }: Props) {
   const [si, setSI] = useState(0), [wi, setWI] = useState(0), [accent, setAccent] = useState<Accent>("en-US"), [zoom, setZoom] = useState(false);
   const [drag, setDrag] = useState<DragState | null>(null), [draw, setDraw] = useState<DrawState | null>(null);
   const [draggedWord, setDraggedWord] = useState<{ segmentID: string; wordID: string } | null>(null), [wordDropIndex, setWordDropIndex] = useState<number | null>(null);
   const [draggedSegmentID, setDraggedSegmentID] = useState<string | null>(null), [segmentDropIndex, setSegmentDropIndex] = useState<number | null>(null);
   const [inlineSegmentID, setInlineSegmentID] = useState<string | null>(null), [savingInline, setSavingInline] = useState(false), [playing, setPlaying] = useState(""), [audioError, setAudioError] = useState("");
   const [regeneratingAudio, setRegeneratingAudio] = useState("");
+  const [uploadingWordAudio, setUploadingWordAudio] = useState("");
   const surface = useRef<HTMLDivElement>(null), player = useRef<HTMLAudioElement | null>(null), interactionMoved = useRef(false);
   const activeAccent = availableAccents.includes(accent) ? accent : availableAccents[0] || "en-US";
   const segments = content.segments || [], segment = segments[si], word = segment?.words[wi];
@@ -157,6 +159,18 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       setAudioError((error as Error).message || "重新生成音频失败");
     } finally {
       setRegeneratingAudio("");
+    }
+  }
+  async function uploadWordAudio(itemId: string, text: string, file: File) {
+    if (!onUploadWordAudio || uploadingWordAudio || regeneratingAudio) return;
+    setUploadingWordAudio(itemId);
+    setAudioError("");
+    try {
+      await onUploadWordAudio(itemId, text, file);
+    } catch (error) {
+      setAudioError((error as Error).message || "上传音频失败");
+    } finally {
+      setUploadingWordAudio("");
     }
   }
   function addSegment() {
@@ -350,14 +364,28 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
         {typeof word.ocr_confidence === "number" && <p className={word.ocr_needs_review ? "ocr-confidence review" : "ocr-confidence"}>PaddleOCR 置信度：{Math.round(word.ocr_confidence * 100)}%{word.ocr_needs_review ? " · 建议人工核对" : ""}</p>}
         {hasSpellingErrorHint(word) && <p className="translation-spelling-word-warning"><strong>⚠ 翻译模型提示拼写错误</strong>：请核对英文、词义和音标。当前返回：{word.meaning}</p>}
         <div className="form-grid"><label>英文<input value={word.text} onChange={(e) => updateWord(si, wi, { text: e.target.value })} /></label><label>词义<input value={word.meaning || ""} onChange={(e) => updateWord(si, wi, { meaning: e.target.value })} /></label><label>音标<input value={word.phonetic || ""} onChange={(e) => updateWord(si, wi, { phonetic: e.target.value })} /></label></div>
-        {onRegenerateAudio && audioMode(segment) !== "none" && word.text.trim() && availableAccents.length > 0 && <div className="editor-audio-regenerate">
+        {(onRegenerateAudio || onUploadWordAudio) && audioMode(segment) !== "none" && word.text.trim() && <div className="editor-audio-regenerate">
           <span>当前单词音频</span>
-          {availableAccents.map((itemAccent) => {
+          {onRegenerateAudio && availableAccents.map((itemAccent) => {
             const key = `${word.id}:${itemAccent}`;
-            return <button type="button" key={itemAccent} disabled={!editable || Boolean(regeneratingAudio)} onClick={() => void regenerateAudio(word.id, itemAccent, "word", word.text)}>
+            return <button type="button" key={itemAccent} disabled={!editable || Boolean(regeneratingAudio) || Boolean(uploadingWordAudio)} onClick={() => void regenerateAudio(word.id, itemAccent, "word", word.text)}>
               {regeneratingAudio === key ? "正在生成…" : itemAccent === "en-US" ? "重新生成美音" : "重新生成英音"}
             </button>;
           })}
+          {onUploadWordAudio && <label className="editor-audio-upload-button" title="上传后替换整本教材中该单词共用的正式音频；适合 ph、ck 等 phonics 特殊发音">
+            {uploadingWordAudio === word.id ? "正在上传…" : "上传音频"}
+            <input
+              type="file"
+              accept="audio/*,.wav,.flac,.ogg,.mp3"
+              disabled={!editable || Boolean(regeneratingAudio) || Boolean(uploadingWordAudio)}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0];
+                e.currentTarget.value = "";
+                if (file) void uploadWordAudio(word.id, word.text, file);
+              }}
+            />
+          </label>}
+          {onUploadWordAudio && <small className="editor-audio-upload-note">人工上传会覆盖整本教材该单词的共享音频，不走 ASR/Whisper，只做音频合法性检查。</small>}
         </div>}
         <div className="coordinate-grid">{["左", "上", "宽", "高"].map((label, index) => <label key={label}>{label}%<input type="number" min="0" max="100" step="0.1" value={Number(((word.box?.[index] || 0) * 100).toFixed(2))} onChange={(e) => { const box = [...(word.box || [0.1, 0.1, 0.08, 0.03])] as [number, number, number, number]; box[index] = Number(e.target.value) / 100; updateWord(si, wi, { box }); }} /></label>)}</div>
         <button type="button" onClick={() => removeWordAt(si, wi)}>删除单词</button>
