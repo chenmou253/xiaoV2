@@ -41,9 +41,10 @@ type EditorService struct {
 	// from audioMu so an administrator can terminate a stuck daemon while the
 	// worker goroutine is blocked waiting for its output.
 	audioProcessMu sync.Mutex
-	audioCmd       *exec.Cmd
-	audioIn        io.WriteCloser
-	audioOut       *bufio.Scanner
+	audioCmd         *exec.Cmd
+	audioIn          io.WriteCloser
+	audioOut         *bufio.Scanner
+	audioDaemonModel string
 	// audioRestartMu closes the small gap between claiming an audio job and
 	// registering it as the in-process job.  Without it, a restart request
 	// could clear files while the old worker was just about to start writing.
@@ -1714,29 +1715,7 @@ func (s *EditorService) runAudioDaemon(ctx context.Context, job *model.TextbookJ
 func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, work string, page int, mode string) error {
 	s.audioMu.Lock()
 	defer s.audioMu.Unlock()
-	s.audioProcessMu.Lock()
-	if s.audioCmd == nil || s.audioCmd.ProcessState != nil {
-		cmd := exec.Command(s.cfg.Python, filepath.Join("scripts", "generate_audio.py"), "--daemon")
-		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
-		in, e := cmd.StdinPipe()
-		if e != nil {
-			s.audioProcessMu.Unlock()
-			return e
-		}
-		out, e := cmd.StdoutPipe()
-		if e != nil {
-			s.audioProcessMu.Unlock()
-			return e
-		}
-		cmd.Stderr = os.Stderr
-		if e = cmd.Start(); e != nil {
-			s.audioProcessMu.Unlock()
-			return e
-		}
-		s.audioCmd, s.audioIn, s.audioOut = cmd, in, bufio.NewScanner(out)
-	}
-	audioIn, audioOut := s.audioIn, s.audioOut
-	s.audioProcessMu.Unlock()
+
 	var draftPage model.TextbookDraftPage
 	if e := s.db.WithContext(ctx).Where("draft_id=? AND position=?", d.ID, page).First(&draftPage).Error; e != nil {
 		return e
@@ -1758,6 +1737,38 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 		}
 		voices = map[string]string{job.Accent: voice}
 	}
+
+	// A daemon process is the memory boundary for local MLX models. Never ask
+	// one Python process to load a second Qwen model: if the requested model is
+	// different, terminate the idle daemon first and start a fresh one. The
+	// outer audioMu serializes audio jobs, so no active generation is killed.
+	s.audioProcessMu.Lock()
+	if s.audioCmd != nil && s.audioCmd.ProcessState == nil && s.audioDaemonModel != "" && s.audioDaemonModel != modelID {
+		s.stopAudioDaemonLocked()
+	}
+	if s.audioCmd == nil || s.audioCmd.ProcessState != nil {
+		cmd := exec.Command(s.cfg.Python, filepath.Join("scripts", "generate_audio.py"), "--daemon")
+		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
+		in, e := cmd.StdinPipe()
+		if e != nil {
+			s.audioProcessMu.Unlock()
+			return e
+		}
+		out, e := cmd.StdoutPipe()
+		if e != nil {
+			s.audioProcessMu.Unlock()
+			return e
+		}
+		cmd.Stderr = os.Stderr
+		if e = cmd.Start(); e != nil {
+			s.audioProcessMu.Unlock()
+			return e
+		}
+		s.audioCmd, s.audioIn, s.audioOut, s.audioDaemonModel = cmd, in, bufio.NewScanner(out), modelID
+	}
+	audioIn, audioOut := s.audioIn, s.audioOut
+	s.audioProcessMu.Unlock()
+
 	request := map[string]any{"resource_root": work,
 		"book_id": d.BookID, "page": page, "mode": mode, "voices": voices,
 		"model_id": modelID}
@@ -1821,9 +1832,7 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 	}
 }
 
-func (s *EditorService) stopAudioDaemon() {
-	s.audioProcessMu.Lock()
-	defer s.audioProcessMu.Unlock()
+func (s *EditorService) stopAudioDaemonLocked() {
 	if s.audioIn != nil {
 		_ = s.audioIn.Close()
 	}
@@ -1831,6 +1840,30 @@ func (s *EditorService) stopAudioDaemon() {
 		_ = s.audioCmd.Process.Kill()
 	}
 	s.audioCmd, s.audioIn, s.audioOut = nil, nil, nil
+	s.audioDaemonModel = ""
+}
+
+func (s *EditorService) stopAudioDaemon() {
+	s.audioProcessMu.Lock()
+	defer s.audioProcessMu.Unlock()
+	s.stopAudioDaemonLocked()
+}
+
+// ReleaseAudioDaemonForModelSwitch drops an idle resident TTS process when the
+// selected model changes. The next audio job lazily starts the newly selected
+// model, so choosing a model by itself does not consume MLX memory.
+func (s *EditorService) ReleaseAudioDaemonForModelSwitch(oldModel, newModel string) error {
+	if strings.TrimSpace(oldModel) == strings.TrimSpace(newModel) {
+		return nil
+	}
+	s.audioJobMu.Lock()
+	active := s.audioJobID != 0
+	s.audioJobMu.Unlock()
+	if active {
+		return conflict("当前有音频生成任务正在运行，请完成后再切换 TTS 模型")
+	}
+	s.stopAudioDaemon()
+	return nil
 }
 
 func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, work string, page int) error {
