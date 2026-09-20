@@ -12,6 +12,7 @@ type Props = {
   availableAccents: Accent[];
   onChange: (value: Content) => void;
   onCommit?: (value: Content) => Promise<void> | void;
+  onRegenerateAudio?: (itemId: string, accent: Accent, kind: "sentence" | "word", text: string) => Promise<void> | void;
 };
 type Anchor = [number, number] | [number, number, number, number];
 type AudioMode = NonNullable<Segment["audio_mode"]>;
@@ -46,12 +47,13 @@ function wordBoxFor(anchor: Anchor | undefined, index: number, total: number): [
   return [clamp(x + index * (boxWidth + gap), 1 - boxWidth), clamp(y, 1 - boxHeight), boxWidth, boxHeight];
 }
 
-export default function DraftPageEditor({ content, image, draftId, page, editable, availableAccents, onChange, onCommit }: Props) {
+export default function DraftPageEditor({ content, image, draftId, page, editable, availableAccents, onChange, onCommit, onRegenerateAudio }: Props) {
   const [si, setSI] = useState(0), [wi, setWI] = useState(0), [accent, setAccent] = useState<Accent>("en-US"), [zoom, setZoom] = useState(false);
   const [drag, setDrag] = useState<DragState | null>(null), [draw, setDraw] = useState<DrawState | null>(null);
   const [draggedWord, setDraggedWord] = useState<{ segmentID: string; wordID: string } | null>(null), [wordDropIndex, setWordDropIndex] = useState<number | null>(null);
   const [draggedSegmentID, setDraggedSegmentID] = useState<string | null>(null), [segmentDropIndex, setSegmentDropIndex] = useState<number | null>(null);
   const [inlineSegmentID, setInlineSegmentID] = useState<string | null>(null), [savingInline, setSavingInline] = useState(false), [playing, setPlaying] = useState(""), [audioError, setAudioError] = useState("");
+  const [regeneratingAudio, setRegeneratingAudio] = useState("");
   const surface = useRef<HTMLDivElement>(null), player = useRef<HTMLAudioElement | null>(null), interactionMoved = useRef(false);
   const activeAccent = availableAccents.includes(accent) ? accent : availableAccents[0] || "en-US";
   const segments = content.segments || [], segment = segments[si], word = segment?.words[wi];
@@ -144,6 +146,19 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
   // may also move a hotspot, but releasing it must never make the speaker
   // appear dead because a drag flag leaked into the following click.
   function clickAudio(id: string) { interactionMoved.current = false; play(id); }
+  async function regenerateAudio(itemId: string, targetAccent: Accent, kind: "sentence" | "word", text: string) {
+    if (!onRegenerateAudio || regeneratingAudio) return;
+    const key = `${itemId}:${targetAccent}`;
+    setRegeneratingAudio(key);
+    setAudioError("");
+    try {
+      await onRegenerateAudio(itemId, targetAccent, kind, text);
+    } catch (error) {
+      setAudioError((error as Error).message || "重新生成音频失败");
+    } finally {
+      setRegeneratingAudio("");
+    }
+  }
   function addSegment() {
     const next = [...segments, { id: uid(), label: "课文点读", text: "", translation: "", anchor: [0.45, 0.45, 0.03, 0.03] as [number, number, number, number], words: [], audio_mode: "sentence_and_words" as AudioMode }];
     setSegments(next); setSI(next.length - 1); setWI(0); setInlineSegmentID(next[next.length - 1].id);
@@ -309,6 +324,15 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       {audioMode(segment) === "none" && <p className="editor-audio-mode-note">本片段不生成整句或单词音频。</p>}
       <label>片段英文（可直接编辑）<textarea rows={3} value={segment.text} onChange={(e) => updateSegment(si, { text: e.target.value })} /></label>
       <label>整句翻译<textarea value={segment.translation || ""} onChange={(e) => updateSegment(si, { translation: e.target.value })} /></label>
+      {onRegenerateAudio && audioMode(segment) === "sentence_and_words" && segment.text.trim() && availableAccents.length > 0 && <div className="editor-audio-regenerate">
+        <span>整句音频</span>
+        {availableAccents.map((itemAccent) => {
+          const key = `${segment.id}:${itemAccent}`;
+          return <button type="button" key={itemAccent} disabled={!editable || Boolean(regeneratingAudio)} onClick={() => void regenerateAudio(segment.id, itemAccent, "sentence", segment.text)}>
+            {regeneratingAudio === key ? "正在生成…" : itemAccent === "en-US" ? "重新生成美音" : "重新生成英音"}
+          </button>;
+        })}
+      </div>}
       {typeof segment.ocr_confidence === "number" && <p className={segment.ocr_needs_review ? "ocr-confidence review" : "ocr-confidence"}>本段 OCR 置信度：{Math.round(segment.ocr_confidence * 100)}%{segment.ocr_needs_review ? " · 建议人工核对" : ""}</p>}
       <div className="coordinate-grid">{["整句左", "整句上", "整句宽", "整句高"].map((label, index) => <label key={label}>{label}%<input type="number" min="0" max="100" step="0.1" value={Number((boundedAnchor(segment.anchor)[index] * 100).toFixed(2))} onChange={(e) => { const anchor = boundedAnchor(segment.anchor), value = Number(e.target.value) / 100; if (index === 0) anchor[0] = clamp(value, 1 - anchor[2]); else if (index === 1) anchor[1] = clamp(value, 1 - anchor[3]); else if (index === 2) anchor[2] = clamp(value, 1 - anchor[0]); else anchor[3] = clamp(value, 1 - anchor[1]); updateSegment(si, { anchor }); }} /></label>)}</div>
       <div className="editor-words" onDragOver={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id || e.target !== e.currentTarget) return; e.preventDefault(); setWordDropIndex(segment.words.length); }} onDrop={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); reorderWord(si, wordDropIndex ?? segment.words.length); finishWordDrag(); }}>
@@ -326,6 +350,15 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
         {typeof word.ocr_confidence === "number" && <p className={word.ocr_needs_review ? "ocr-confidence review" : "ocr-confidence"}>PaddleOCR 置信度：{Math.round(word.ocr_confidence * 100)}%{word.ocr_needs_review ? " · 建议人工核对" : ""}</p>}
         {hasSpellingErrorHint(word) && <p className="translation-spelling-word-warning"><strong>⚠ 翻译模型提示拼写错误</strong>：请核对英文、词义和音标。当前返回：{word.meaning}</p>}
         <div className="form-grid"><label>英文<input value={word.text} onChange={(e) => updateWord(si, wi, { text: e.target.value })} /></label><label>词义<input value={word.meaning || ""} onChange={(e) => updateWord(si, wi, { meaning: e.target.value })} /></label><label>音标<input value={word.phonetic || ""} onChange={(e) => updateWord(si, wi, { phonetic: e.target.value })} /></label></div>
+        {onRegenerateAudio && audioMode(segment) !== "none" && word.text.trim() && availableAccents.length > 0 && <div className="editor-audio-regenerate">
+          <span>当前单词音频</span>
+          {availableAccents.map((itemAccent) => {
+            const key = `${word.id}:${itemAccent}`;
+            return <button type="button" key={itemAccent} disabled={!editable || Boolean(regeneratingAudio)} onClick={() => void regenerateAudio(word.id, itemAccent, "word", word.text)}>
+              {regeneratingAudio === key ? "正在生成…" : itemAccent === "en-US" ? "重新生成美音" : "重新生成英音"}
+            </button>;
+          })}
+        </div>}
         <div className="coordinate-grid">{["左", "上", "宽", "高"].map((label, index) => <label key={label}>{label}%<input type="number" min="0" max="100" step="0.1" value={Number(((word.box?.[index] || 0) * 100).toFixed(2))} onChange={(e) => { const box = [...(word.box || [0.1, 0.1, 0.08, 0.03])] as [number, number, number, number]; box[index] = Number(e.target.value) / 100; updateWord(si, wi, { box }); }} /></label>)}</div>
         <button type="button" onClick={() => removeWordAt(si, wi)}>删除单词</button>
       </>}
