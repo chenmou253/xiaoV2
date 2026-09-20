@@ -235,6 +235,25 @@ func (h *EditorHandler) FailedAudio(c *gin.Context) {
 	}
 	serveFile(c, path, "audio/wav")
 }
+func (h *EditorHandler) RegenerateAudioItem(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	var in struct {
+		Accent  string `json:"accent"`
+		Version uint64 `json:"version"`
+	}
+	if !bindJSON(c, &in) {
+		return
+	}
+	if e := h.service.RegenerateAudioItem(c.Request.Context(), c.Param("draftId"), p, c.Param("itemId"), in.Accent, in.Version, identity(c).ID); e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
 func (h *EditorHandler) RetryAudioIssue(c *gin.Context) {
 	p, ok := pageParam(c)
 	if !ok {
