@@ -377,15 +377,16 @@ func (h *EditorHandler) SaveMeta(c *gin.Context) {
 
 func (h *EditorHandler) SwitchModels(c *gin.Context) {
 	var in struct {
-		OCRModel string `json:"ocr_model"`
-		TTSModel string `json:"tts_model"`
+		OCRModel         string `json:"ocr_model"`
+		TranslationModel string `json:"translation_model"`
+		TTSModel         string `json:"tts_model"`
 		TTSVoice string `json:"tts_voice"`
 		Version  uint64 `json:"version"`
 	}
 	if !bindJSON(c, &in) {
 		return
 	}
-	if e := h.service.SwitchModels(c.Request.Context(), c.Param("draftId"), in.Version, identity(c).ID, ai.Settings{OCRModel: in.OCRModel, TTSModel: in.TTSModel, TTSVoice: in.TTSVoice}); e != nil {
+	if e := h.service.SwitchModels(c.Request.Context(), c.Param("draftId"), in.Version, identity(c).ID, ai.Settings{OCRModel: in.OCRModel, TranslationModel: in.TranslationModel, TTSModel: in.TTSModel, TTSVoice: in.TTSVoice}); e != nil {
 		writePlatformError(c, e)
 		return
 	}
