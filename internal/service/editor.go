@@ -187,6 +187,16 @@ func pageModelSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Sett
 
 func pageIsLocked(p model.TextbookDraftPage) bool { return p.Checked && p.AudioChecked }
 
+// Translation provenance is locked as soon as the text stage is confirmed.
+// Before that, a page follows the current draft translation default; the page
+// snapshot is written only after a translation job actually succeeds.
+func pageTranslationSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Settings {
+	if p.Checked {
+		return pageModelSettings(d, p)
+	}
+	return draftModelSettings(d)
+}
+
 // Unreviewed pages follow the draft default. Fully confirmed pages stay pinned
 // to their historical model snapshot so a later draft-level switch is safe.
 func pageAudioSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Settings {
@@ -1214,7 +1224,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if !hasSegments(current.Content) {
 				return conflict(fmt.Sprintf("第 %d 页没有可翻译的 OCR 内容", current.Position))
 			}
-			translationModelID := pageModelSettings(d, current).TranslationModel
+			translationModelID := pageTranslationSettings(d, current).TranslationModel
 			translationModel, ok := ai.Find(translationModelID)
 			if !ok || translationModel.Type != "translation" || !translationModel.Enabled {
 				return bad("当前页翻译模型无效")
@@ -1552,7 +1562,7 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 			if err := tx.Where("draft_id=? AND position=?", draft.ID, job.Page).First(&draftPage).Error; err != nil {
 				return err
 			}
-			modelID := pageModelSettings(draft, draftPage).TranslationModel
+			modelID := pageTranslationSettings(draft, draftPage).TranslationModel
 			if item, ok := ai.Find(modelID); ok {
 				selectedModel = item
 			}
@@ -2003,7 +2013,7 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 
 	modelID := strings.TrimSpace(job.ModelID)
 	if modelID == "" {
-		modelID = pageModelSettings(d, current).TranslationModel
+		modelID = pageTranslationSettings(d, current).TranslationModel
 	}
 	if ai.IsLocalTranslation(modelID) {
 		if e := s.runTranslationDaemon(ctx, job, input, output, modelID); e != nil {
