@@ -718,10 +718,6 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(calls["count"], 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_batch_translation_accepts_leading_zero_id_variants(self):
         from translate_page import parse_batch_translation
 
@@ -772,3 +768,8 @@ if __name__ == "__main__":
         )
         with self.assertRaises(ValueError):
             parse_batch_translation(raw, expected)
+
+if __name__ == "__main__":
+    unittest.main()
+
+
