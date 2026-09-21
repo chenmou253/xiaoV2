@@ -1818,6 +1818,10 @@ func (s *EditorService) runAudioDaemon(ctx context.Context, job *model.TextbookJ
 }
 
 func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, work string, page int, mode string) error {
+	// Audio jobs take over the local MLX memory budget. Cloud TTS is cheap, but
+	// stopping an idle local translation daemon here also keeps the rule simple
+	// and deterministic when a draft changes providers.
+	s.stopTranslationDaemon()
 	s.audioMu.Lock()
 	defer s.audioMu.Unlock()
 
@@ -1986,55 +1990,183 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	if e := os.WriteFile(input, []byte(current.Content), 0640); e != nil {
 		return e
 	}
-	cmd := exec.CommandContext(ctx, s.cfg.Python, filepath.Join("scripts", "translate_page.py"), "--input", input, "--output", output)
-	cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
-	cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
-	stdout, e := cmd.StdoutPipe()
-	if e != nil {
-		return e
+
+	modelID := strings.TrimSpace(job.ModelID)
+	if modelID == "" {
+		modelID = pageModelSettings(d, current).TranslationModel
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	job.Progress, job.Total = 0, 2
-	s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
-	if e := cmd.Start(); e != nil {
-		return e
-	}
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		var event struct {
-			Event    string `json:"event"`
-			Stage    string `json:"stage"`
-			Progress int    `json:"progress"`
-			Total    int    `json:"total"`
+	if ai.IsLocalTranslation(modelID) {
+		if e := s.runTranslationDaemon(ctx, job, input, output, modelID); e != nil {
+			return e
 		}
-		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "progress" || event.Total <= 0 {
-			continue
+	} else {
+		// Cloud translation is lightweight and does not need to evict an idle
+		// TTS daemon. It still uses the exact same translation/review prompts.
+		s.stopTranslationDaemon()
+		cmd := exec.CommandContext(
+			ctx,
+			s.cfg.Python,
+			filepath.Join("scripts", "translate_page.py"),
+			"--input", input,
+			"--output", output,
+			"--model-id", modelID,
+		)
+		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
+		cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
+		stdout, e := cmd.StdoutPipe()
+		if e != nil {
+			return e
 		}
-		job.Progress, job.Total = event.Progress, event.Total
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		job.Progress, job.Total = 0, 2
 		s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+		if e := cmd.Start(); e != nil {
+			return e
+		}
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			var event struct {
+				Event    string `json:"event"`
+				Stage    string `json:"stage"`
+				Progress int    `json:"progress"`
+				Total    int    `json:"total"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "progress" || event.Total <= 0 {
+				continue
+			}
+			job.Progress, job.Total = event.Progress, event.Total
+			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+		}
+		if e := scanner.Err(); e != nil {
+			_ = cmd.Process.Kill()
+			return e
+		}
+		if e := cmd.Wait(); e != nil {
+			return fmt.Errorf("translate: %w: %s", e, strings.TrimSpace(stderr.String()))
+		}
 	}
-	if e := scanner.Err(); e != nil {
-		_ = cmd.Process.Kill()
-		return e
-	}
-	if e := cmd.Wait(); e != nil {
-		return fmt.Errorf("translate: %w: %s", e, strings.TrimSpace(stderr.String()))
-	}
+
 	translated, e := os.ReadFile(output)
 	if e != nil {
 		return e
 	}
-	// The script reports 0/2 while translating, 1/2 while reviewing, and
-	// 2/2 after the whole page has been validated. Keep that same total in the
-	// job record so a completed task cannot be persisted as 1/2 (50%).
 	job.Progress, job.Total = 2, 2
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{"content": string(translated), "translation_model": job.ModelID, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{
+			"content": string(translated),
+			"translation_model": modelID,
+			"checked": false,
+			"audio_checked": false,
+			"version": gorm.Expr("version+1"),
+		}).Error; e != nil {
 			return e
 		}
 		return tx.Model(&model.TextbookDraft{}).Where("id=?", d.ID).Updates(map[string]any{"version": gorm.Expr("version+1")}).Error
 	})
+}
+
+func (s *EditorService) runTranslationDaemon(ctx context.Context, job *model.TextbookJob, input, output, modelID string) error {
+	s.translationMu.Lock()
+	defer s.translationMu.Unlock()
+
+	// Local translation and local TTS are deliberately mutually exclusive on
+	// 16 GB Apple Silicon machines. An idle TTS/Whisper daemon is released
+	// before MLX loads the 4B translation model.
+	s.stopAudioDaemon()
+
+	s.translationProcessMu.Lock()
+	if s.translationCmd != nil && s.translationCmd.ProcessState == nil &&
+		s.translationDaemonModel != "" && s.translationDaemonModel != modelID {
+		s.stopTranslationDaemonLocked()
+	}
+	if s.translationCmd == nil || s.translationCmd.ProcessState != nil {
+		cmd := exec.Command(s.cfg.Python, filepath.Join("scripts", "translation_daemon.py"))
+		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
+		cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+filepath.Dir(input))
+		in, e := cmd.StdinPipe()
+		if e != nil {
+			s.translationProcessMu.Unlock()
+			return e
+		}
+		out, e := cmd.StdoutPipe()
+		if e != nil {
+			s.translationProcessMu.Unlock()
+			return e
+		}
+		cmd.Stderr = os.Stderr
+		if e := cmd.Start(); e != nil {
+			s.translationProcessMu.Unlock()
+			return e
+		}
+		s.translationCmd, s.translationIn, s.translationOut = cmd, in, bufio.NewScanner(out)
+		s.translationDaemonModel = modelID
+	}
+	in, out := s.translationIn, s.translationOut
+	s.translationProcessMu.Unlock()
+
+	job.Progress, job.Total = 0, 2
+	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": 2})
+	request := map[string]any{"input": input, "output": output, "model_id": modelID}
+	raw, _ := json.Marshal(request)
+	if _, e := fmt.Fprintf(in, "%s\n", raw); e != nil {
+		s.stopTranslationDaemon()
+		return e
+	}
+	for {
+		line, e := scanDaemonLine(ctx, out, s.stopTranslationDaemon, "translation")
+		if e != nil {
+			if errors.Is(e, io.EOF) {
+				e = errors.New("translation worker exited unexpectedly")
+			}
+			return e
+		}
+		var event struct {
+			Event    string `json:"event"`
+			Progress int    `json:"progress"`
+			Total    int    `json:"total"`
+			Error    string `json:"error"`
+			Done     bool   `json:"done"`
+		}
+		if json.Unmarshal(line, &event) != nil {
+			continue
+		}
+		if event.Total > 0 && event.Event == "progress" {
+			job.Progress, job.Total = event.Progress, event.Total
+			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+		}
+		if event.Done {
+			if event.Error != "" {
+				return errors.New(event.Error)
+			}
+			return nil
+		}
+	}
+}
+
+func (s *EditorService) stopTranslationDaemonLocked() {
+	if s.translationIn != nil {
+		_ = s.translationIn.Close()
+	}
+	if s.translationCmd != nil && s.translationCmd.Process != nil {
+		_ = s.translationCmd.Process.Kill()
+	}
+	s.translationCmd, s.translationIn, s.translationOut = nil, nil, nil
+	s.translationDaemonModel = ""
+}
+
+func (s *EditorService) stopTranslationDaemon() {
+	s.translationProcessMu.Lock()
+	defer s.translationProcessMu.Unlock()
+	s.stopTranslationDaemonLocked()
+}
+
+func (s *EditorService) ReleaseTranslationDaemonForModelSwitch(oldModel, newModel string) error {
+	if strings.TrimSpace(oldModel) == strings.TrimSpace(newModel) {
+		return nil
+	}
+	s.stopTranslationDaemon()
+	return nil
 }
 
 // runOCRDaemon sends one page request to a process that keeps PaddleOCR's
