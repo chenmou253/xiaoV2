@@ -1194,7 +1194,7 @@ def _local_structured_call(
     schema: dict[str, Any],
     max_completion_tokens: int,
 ) -> Any:
-    """Run one local whole-page request and regenerate malformed JSON once."""
+    """Run one local structured request and regenerate malformed/invalid output once."""
     last_error: Exception | None = None
     for attempt in (1, 2):
         raw: str | None = None
@@ -1219,6 +1219,22 @@ def _local_structured_call(
             return parser(raw)
         except Exception as exc:
             last_error = exc
+            if raw is not None:
+                print(
+                    "[TRANSLATION RAW RESPONSE]",
+                    json.dumps(
+                        {
+                            "request_type": kind,
+                            "page": page,
+                            "attempt": attempt,
+                            "model": getattr(backend, "model", ""),
+                            "response": raw,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
             log_failure(
                 kind=kind,
                 target="local_page",
