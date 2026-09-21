@@ -46,3 +46,18 @@ func TestPageAudioRegenerationIssuesRejectRealContentProblems(t *testing.T) {
 		t.Fatal("real publication issue should still block page audio regeneration")
 	}
 }
+
+
+func TestPageTextReviewIssuesIgnoreAudioState(t *testing.T) {
+	raw := `{"segments":[{"id":"s1","text":"There is a hospital.","translation":"这里有一家医院。","anchor":[0.1,0.1,0.5,0.05],"words":[{"id":"w1","text":"hospital","meaning":"医院","phonetic":"ˈhɑspɪtəl","box":[0.2,0.1,0.1,0.03]}]}]}`
+	if issues := pageTextReviewIssues(raw); len(issues) != 0 {
+		t.Fatalf("complete text content should be independently confirmable before audio, got %#v", issues)
+	}
+}
+
+func TestPageTextReviewIssuesStillRejectRealTextProblems(t *testing.T) {
+	raw := `{"segments":[{"id":"s1","text":"hospita","translation":"医院","anchor":[0.1,0.1,0.5,0.05],"words":[{"id":"w1","text":"hospita","meaning":"医院（拼写错误，应为hospital）","phonetic":"ˈhɑspɪtəl","box":[0.2,0.1,0.1,0.03]}]}]}`
+	if issues := pageTextReviewIssues(raw); len(issues) == 0 {
+		t.Fatal("real text/publication issue must block text confirmation")
+	}
+}
