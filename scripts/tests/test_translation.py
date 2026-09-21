@@ -715,6 +715,35 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "世界")
 
+    def test_local_translation_accepts_empty_word_placeholders(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello world.",
+            "target_text": "Hello world.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Hello", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
+            ],
+        }]
+        raw = json.dumps(
+            {
+                "segments": [{
+                    "translation": "你好，世界。",
+                    "words": [
+                        {"meaning": "你好", "phonetic": "həˈloʊ"},
+                        {"meaning": "", "phonetic": ""},
+                    ],
+                }]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["phonetic"], "")
+
     def test_local_translation_rejects_position_count_mismatch(self):
         from translate_page import parse_local_translation
 
