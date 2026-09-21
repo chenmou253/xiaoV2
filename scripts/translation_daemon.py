@@ -32,6 +32,13 @@ def main() -> None:
             source = Path(str(request["input"]))
             output = Path(str(request["output"]))
             if backend is None or loaded_model != model_id:
+                print(
+                    json.dumps(
+                        {"event": "status", "message": "正在加载本地 Qwen3-4B 翻译模型"},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
                 backend = LocalMLXBackend()
                 loaded_model = model_id
             content = json.loads(source.read_text(encoding="utf-8"))
