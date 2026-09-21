@@ -649,16 +649,16 @@ class TranslationTests(unittest.TestCase):
         validate_complete_candidates(candidates, expected)
         self.assertEqual(expected, {"s0": {"w0"}})
 
-    def test_local_translation_batches_are_fixed_at_three_segments(self):
+    def test_local_translation_batches_are_fixed_at_one_segment(self):
         from translate_page import _local_item_batches
 
         items = [{"id": f"s{index}", "target_text": str(index), "context": "", "words": []}
                  for index in range(7)]
         batches = _local_item_batches(items)
-        self.assertEqual([len(batch) for batch in batches], [3, 3, 1])
+        self.assertEqual([len(batch) for batch in batches], [1, 1, 1, 1, 1, 1, 1])
         self.assertEqual(
             [[item["id"] for item in batch] for batch in batches],
-            [["s0", "s1", "s2"], ["s3", "s4", "s5"], ["s6"]],
+            [["s0"], ["s1"], ["s2"], ["s3"], ["s4"], ["s5"], ["s6"]],
         )
 
     def test_local_translation_prompt_uses_one_shared_context(self):
