@@ -132,7 +132,42 @@ func TestRemovePageFromAudioManifestKeepsSharedWordFileWhileReferenced(t *testin
 	if err := removePageFromAudioManifest(manifestPath, 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(shared); !os.IsNotExist(err) {
-		t.Fatalf("unreferenced shared word audio should be removed, stat error=%v", err)
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("page cleanup must never delete book-wide shared word audio: %v", err)
+	}
+}
+
+func TestRemovePageFromAudioManifestDoesNotDeleteSharedWordWhenManifestReferenceIsIncomplete(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "word-cache", "cd", "shared.wav")
+	if err := os.MkdirAll(filepath.Dir(shared), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("shared word audio"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "manifest.json")
+	manifest := map[string]any{
+		"schema_version": 2,
+		"items": []map[string]any{
+			// Simulate an older/incomplete manifest that only lists the page
+			// currently being regenerated even though another DB page still
+			// references the same word-cache WAV.
+			{"page": 5, "item_id": "p5-word", "file": "word-cache/cd/shared.wav"},
+		},
+		"failures": []map[string]any{},
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, raw, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePageFromAudioManifest(manifestPath, 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("shared word cache was deleted by page cleanup: %v", err)
 	}
 }
