@@ -122,7 +122,8 @@ LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translati
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
 
-The input contains an ordered "items" array. Each item contains one target sentence, its context, and an ordered words array.
+The input contains one shared "context" for the current batch and an ordered "items" array. Each item contains one target sentence and an ordered words array.
+The shared context applies to every item in this batch. Use it only to resolve ambiguity; do not translate it.
 Return exactly this shape:
 {"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
 
@@ -150,7 +151,7 @@ LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structure
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
 
-The input contains ordered candidate segments and ordered candidate words. Do NOT output any source IDs.
+The input contains one shared "context" for the current batch plus ordered candidate segments and candidate words. The shared context applies to every candidate. Do NOT output any source IDs.
 Return exactly:
 {"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
 
@@ -954,11 +955,35 @@ class LocalStructureError(ValueError):
     """Local-model output is syntactically valid enough to inspect but structurally unusable."""
 
 
+LOCAL_TRANSLATION_BATCH_SEGMENTS = 3
+
+
+def _local_shared_context(items: list[dict[str, Any]]) -> str:
+    """Use the current batch text once as shared context instead of repeating page context per item."""
+    seen: set[str] = set()
+    lines: list[str] = []
+    for item in items:
+        text = normalize_source_text(item.get("target_text", ""))
+        if text and text not in seen:
+            seen.add(text)
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _local_item_batches(
+    items: list[dict[str, Any]],
+    batch_size: int = LOCAL_TRANSLATION_BATCH_SEGMENTS,
+) -> list[list[dict[str, Any]]]:
+    if batch_size < 1:
+        raise ValueError("local translation batch size must be at least 1")
+    return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
+
+
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     payload = {
+        "context": _local_shared_context(items),
         "items": [
             {
-                "context": item["context"],
                 "target_text": item["target_text"],
                 "words": [
                     {
@@ -969,10 +994,11 @@ def local_translation_prompt(items: list[dict[str, Any]]) -> str:
                 ],
             }
             for item in items
-        ]
+        ],
     }
     return (
-        "Translate the following ordered textbook data. "
+        "Translate the following ordered textbook batch. "
+        "The top-level context is shared by all items and is background only; do not translate it. "
         "Do not output or reconstruct any source IDs. "
         "Keep the number and order of segments and words exactly unchanged.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1042,9 +1068,9 @@ def local_review_prompt(
     candidates: dict[str, dict[str, Any]],
 ) -> str:
     payload = {
+        "context": _local_shared_context(items),
         "segments": [
             {
-                "context": item["context"],
                 "target_text": item["target_text"],
                 "candidate_translation": candidates[item["id"]]["translation"],
                 "words": [
@@ -1057,11 +1083,12 @@ def local_review_prompt(
                 ],
             }
             for item in items
-        ]
+        ],
     }
     return (
-        "Review the following ordered textbook translation candidates. "
-        "Refer to items only by zero-based segment_index and word_index. "
+        "Review the following ordered textbook translation batch. "
+        "The top-level context is shared by all candidates and is background only. "
+        "Refer to items only by zero-based segment_index and word_index within this batch. "
         "Do not output or reconstruct source IDs.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
@@ -1706,35 +1733,47 @@ def local_translate_candidates(
     page: int | str | None,
     max_completion_tokens: int,
 ) -> dict[str, dict[str, Any]]:
-    del expected
-    word_count = sum(len(item["words"]) for item in items)
-    print(
-        json.dumps(
-            {
-                "event": "status",
-                "message": f"本地整页翻译：{len(items)} 个片段，{word_count} 个单词；结果按输入位置绑定，不由模型生成 ID",
-            },
-            ensure_ascii=False,
-        ),
-        flush=True,
-    )
-    candidates = _local_structured_call(
-        backend,
-        LOCAL_TRANSLATOR_SYSTEM_PROMPT,
-        local_translation_prompt(items),
-        kind="page_translation",
-        page=page,
-        parser=lambda raw: parse_local_translation(raw, items),
-        schema=LOCAL_TRANSLATION_SCHEMA,
-        max_completion_tokens=min(
-            max_completion_tokens,
-            max(2048, 768 + word_count * 112 + len(items) * 192),
-        ),
-    )
-    # Position-based parsing already rebuilds the real IDs from the OCR input.
-    # Verify the final in-memory shape before reviewer/application.
-    validate_complete_candidates(candidates, expected_for_items(items))
-    return candidates
+    batches = _local_item_batches(items)
+    merged: dict[str, dict[str, Any]] = {}
+    total_batches = len(batches)
+
+    for batch_index, batch_items in enumerate(batches, 1):
+        word_count = sum(len(item["words"]) for item in batch_items)
+        print(
+            json.dumps(
+                {
+                    "event": "status",
+                    "message": (
+                        f"本地分批翻译 {batch_index}/{total_batches}："
+                        f"{len(batch_items)} 个片段，{word_count} 个单词；"
+                        "每批最多 3 个片段，共享 context 只发送一次"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        batch_candidates = _local_structured_call(
+            backend,
+            LOCAL_TRANSLATOR_SYSTEM_PROMPT,
+            local_translation_prompt(batch_items),
+            kind="page_translation",
+            page=page,
+            parser=lambda raw, current=batch_items: parse_local_translation(raw, current),
+            schema=LOCAL_TRANSLATION_SCHEMA,
+            max_completion_tokens=min(
+                max_completion_tokens,
+                max(2048, 768 + word_count * 112 + len(batch_items) * 192),
+            ),
+        )
+        validate_complete_candidates(
+            batch_candidates,
+            expected_for_items(batch_items),
+        )
+        merged.update(batch_candidates)
+
+    validate_complete_candidates(merged, expected)
+    return merged
 
 
 def local_review_candidates(
@@ -1744,42 +1783,58 @@ def local_review_candidates(
     *,
     page: int | str | None,
 ) -> tuple[dict[str, dict[str, Any]], bool]:
-    try:
-        reviewed = _local_structured_call(
-            backend,
-            LOCAL_REVIEWER_SYSTEM_PROMPT,
-            local_review_prompt(items, candidates),
-            kind="page_review",
-            page=page,
-            parser=lambda raw: parse_local_review(raw, items, candidates),
-            schema=LOCAL_REVIEW_SCHEMA,
-            max_completion_tokens=max(
-                1024,
-                256 + sum(len(item["words"]) for item in items) * 40 + len(items) * 64,
-            ),
-        )
-        return reviewed, False
-    except Exception as exc:
-        # Review is quality enhancement only. The translator result has already
-        # passed positional count/shape validation, so retain it and require
-        # human review rather than discarding the whole page.
-        print(
-            "[TRANSLATION REVIEW WARNING]",
-            json.dumps(
-                {
-                    "request_type": "page_review",
-                    "page": page,
-                    "model": getattr(backend, "model", ""),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:800],
-                    "fallback": "kept_validated_local_translation",
-                },
-                ensure_ascii=False,
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
-        return fallback_review(candidates), True
+    batches = _local_item_batches(items)
+    merged: dict[str, dict[str, Any]] = {}
+    review_failed = False
+
+    for batch_index, batch_items in enumerate(batches, 1):
+        batch_candidates = {
+            str(item["id"]): candidates[str(item["id"])]
+            for item in batch_items
+        }
+        try:
+            batch_reviewed = _local_structured_call(
+                backend,
+                LOCAL_REVIEWER_SYSTEM_PROMPT,
+                local_review_prompt(batch_items, batch_candidates),
+                kind="page_review",
+                page=page,
+                parser=lambda raw, current=batch_items, current_candidates=batch_candidates: parse_local_review(
+                    raw,
+                    current,
+                    current_candidates,
+                ),
+                schema=LOCAL_REVIEW_SCHEMA,
+                max_completion_tokens=max(
+                    1024,
+                    256
+                    + sum(len(item["words"]) for item in batch_items) * 40
+                    + len(batch_items) * 64,
+                ),
+            )
+        except Exception as exc:
+            review_failed = True
+            batch_reviewed = fallback_review(batch_candidates)
+            print(
+                "[TRANSLATION REVIEW WARNING]",
+                json.dumps(
+                    {
+                        "request_type": "page_review",
+                        "page": page,
+                        "batch": batch_index,
+                        "model": getattr(backend, "model", ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                        "fallback": "kept_validated_local_batch_translation",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        merged.update(batch_reviewed)
+
+    return merged, review_failed
 
 
 def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[str, Any]:
