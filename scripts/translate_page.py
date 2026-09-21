@@ -403,6 +403,134 @@ class OnlineLLMClient:
         )
 
 
+class LocalMLXBackend:
+    """Resident MLX backend for Apple Silicon local translation."""
+
+    def __init__(self, model_repo: str | None = None) -> None:
+        try:
+            from mlx_lm import generate, load
+        except ImportError as exc:
+            raise RuntimeError(
+                "mlx-lm is unavailable; install requirements-translate.txt"
+            ) from exc
+        self.model = "local-qwen3-4b-instruct-2507"
+        self.model_repo = (
+            model_repo
+            or os.getenv("TRANSLATION_LOCAL_MODEL_REPO", "").strip()
+            or "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+        )
+        self.operation_label = "本地整页翻译"
+        self.request_type = "page_translation"
+        self.page_number: int | str | None = None
+        self.attempt = 1
+        self.status_callback: Callable[[str], None] | None = None
+        try:
+            self.max_tokens = int(os.getenv("LOCAL_TRANSLATION_MAX_TOKENS", "16384"))
+        except ValueError as exc:
+            raise RuntimeError("LOCAL_TRANSLATION_MAX_TOKENS must be an integer") from exc
+        if self.max_tokens < 512:
+            raise RuntimeError("LOCAL_TRANSLATION_MAX_TOKENS must be at least 512")
+        started = time.monotonic()
+        self._model, self._tokenizer = load(self.model_repo)
+        self._generate_fn = generate
+        print(
+            "[TRANSLATION LOCAL HEALTH] "
+            f"model={self.model_repo} load_seconds={time.monotonic() - started:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def set_operation(self, label: str, request_type: str | None = None) -> None:
+        self.operation_label = label
+        if request_type:
+            self.request_type = request_type
+
+    def set_request_context(self, request_type: str, page: int | str | None, attempt: int) -> None:
+        self.request_type = request_type
+        self.page_number = page
+        self.attempt = attempt
+
+    def set_status_callback(self, callback: Callable[[str], None] | None) -> None:
+        self.status_callback = callback
+
+    def _report_status(self, message: str) -> None:
+        if self.status_callback is not None:
+            self.status_callback(message)
+
+    def record_failure(self, _request_type: str) -> None:
+        return None
+
+    def log_summary(self) -> None:
+        return None
+
+    def _prompt(self, system_prompt: str, user_prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        apply_template = getattr(self._tokenizer, "apply_chat_template", None)
+        if callable(apply_template):
+            try:
+                return apply_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return apply_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        return f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}\n\nASSISTANT:\n"
+
+    def generate(self, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+        prompt = self._prompt(system_prompt, user_prompt)
+        token_limit = min(max_tokens, self.max_tokens)
+        started = time.monotonic()
+        result = self._generate_fn(
+            self._model,
+            self._tokenizer,
+            prompt=prompt,
+            max_tokens=token_limit,
+        )
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError("local translation model returned empty content")
+        print(
+            "[TRANSLATION LOCAL] "
+            + json.dumps(
+                {
+                    "request_type": self.request_type,
+                    "page": self.page_number,
+                    "model": self.model_repo,
+                    "latency_seconds": round(time.monotonic() - started, 3),
+                    "max_tokens": token_limit,
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        return result
+
+    def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_completion_tokens: int,
+        *,
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> str:
+        structured_system = (
+            system_prompt
+            + "\n\nReturn only valid JSON. The JSON must match this schema exactly:\n"
+            + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        )
+        return self.generate(structured_system, user_prompt, max_completion_tokens)
+
+
 class CompletionTruncated(RuntimeError):
     """The provider stopped at the requested output token cap."""
 
@@ -1264,7 +1392,12 @@ def _required_env(name: str) -> str:
     return value
 
 
-def configured_backend() -> OnlineLLMClient:
+def configured_backend(model_id: str = "") -> GenerationBackend:
+    selected = (model_id or os.getenv("TRANSLATION_MODEL", "")).strip()
+    if selected == "local-qwen3-4b-instruct-2507":
+        return LocalMLXBackend()
+    if not selected:
+        selected = _required_env("TRANSLATION_MODEL")
     try:
         connect_timeout = float(os.getenv("TRANSLATION_CONNECT_TIMEOUT", "10"))
         read_timeout = float(os.getenv("TRANSLATION_READ_TIMEOUT", "90"))
@@ -1272,10 +1405,16 @@ def configured_backend() -> OnlineLLMClient:
         raise RuntimeError("Invalid translation API timeout configuration") from exc
     if connect_timeout <= 0 or read_timeout <= 0:
         raise RuntimeError("Translation API timeouts must be positive")
+    api_key = os.getenv("TRANSLATION_API_KEY", "").strip() or os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("TRANSLATION_API_KEY or DASHSCOPE_API_KEY is not set")
+    base_url = os.getenv("TRANSLATION_API_BASE_URL", "").strip() or os.getenv("DASHSCOPE_BASE_URL", "").strip()
+    if not base_url:
+        raise RuntimeError("TRANSLATION_API_BASE_URL or DASHSCOPE_BASE_URL is not set")
     return OnlineLLMClient(
-        base_url=_required_env("TRANSLATION_API_BASE_URL"),
-        api_key=_required_env("TRANSLATION_API_KEY"),
-        model=_required_env("TRANSLATION_MODEL"),
+        base_url=base_url,
+        api_key=api_key,
+        model=selected,
         temperature=0.1,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
@@ -1286,11 +1425,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-id", default="")
     args = parser.parse_args()
 
-    backend: OnlineLLMClient | None = None
+    backend: GenerationBackend | None = None
     try:
-        backend = configured_backend()
+        backend = configured_backend(args.model_id)
         content = json.loads(args.input.read_text(encoding="utf-8"))
         translated = translate_page(content, backend)
         args.output.write_text(
@@ -1301,7 +1441,9 @@ def main() -> None:
         raise SystemExit(str(exc)) from exc
     finally:
         if backend is not None:
-            backend.log_summary()
+            logger = getattr(backend, "log_summary", None)
+            if callable(logger):
+                logger()
 
 
 if __name__ == "__main__":
