@@ -1214,6 +1214,14 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if !hasSegments(current.Content) {
 				return conflict(fmt.Sprintf("第 %d 页没有可翻译的 OCR 内容", current.Position))
 			}
+			translationModelID := pageModelSettings(d, current).TranslationModel
+			translationModel, ok := ai.Find(translationModelID)
+			if !ok || translationModel.Type != "translation" || !translationModel.Enabled {
+				return bad("当前页翻译模型无效")
+			}
+			if !translationModel.Available {
+				return bad("当前页翻译模型不可用：" + translationModel.UnavailableReason)
+			}
 			var active int64
 			if e := tx.Model(&model.TextbookJob{}).Where("draft_id=? AND status IN ?", id, []string{"queued", "running"}).Count(&active).Error; e != nil {
 				return e
@@ -1821,7 +1829,9 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 	// Audio jobs take over the local MLX memory budget. Cloud TTS is cheap, but
 	// stopping an idle local translation daemon here also keeps the rule simple
 	// and deterministic when a draft changes providers.
+	s.translationMu.Lock()
 	s.stopTranslationDaemon()
+	s.translationMu.Unlock()
 	s.audioMu.Lock()
 	defer s.audioMu.Unlock()
 
@@ -2165,6 +2175,10 @@ func (s *EditorService) ReleaseTranslationDaemonForModelSwitch(oldModel, newMode
 	if strings.TrimSpace(oldModel) == strings.TrimSpace(newModel) {
 		return nil
 	}
+	if !s.translationMu.TryLock() {
+		return conflict("当前有本地翻译任务正在运行，请完成后再切换翻译模型")
+	}
+	defer s.translationMu.Unlock()
 	s.stopTranslationDaemon()
 	return nil
 }
