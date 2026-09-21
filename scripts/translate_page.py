@@ -1501,6 +1501,194 @@ def translate_target(
     )
 
 
+def build_review_items(
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    review_items: list[dict[str, Any]] = []
+    for item in items:
+        candidate = candidates[item["id"]]
+        review_items.append(
+            {
+                "id": item["id"],
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "candidate_translation": candidate["translation"],
+                "words": [
+                    {
+                        "id": word["id"],
+                        "text": word["text"],
+                        "candidate_meaning": candidate["words"][word["id"]]["meaning"],
+                        "candidate_phonetic": candidate["words"][word["id"]]["phonetic"],
+                    }
+                    for word in item["words"]
+                ],
+            }
+        )
+    return review_items
+
+
+def fallback_review(
+    candidates: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    return {
+        segment_id: {
+            "translation": candidate["translation"],
+            "issues": [],
+            "passed": True,
+            "score": None,
+            "words": {
+                word_id: {
+                    "meaning": word["meaning"],
+                    "phonetic": word["phonetic"],
+                    "issues": [],
+                    "score": None,
+                }
+                for word_id, word in candidate["words"].items()
+            },
+        }
+        for segment_id, candidate in candidates.items()
+    }
+
+
+def local_translate_candidates(
+    backend: LocalMLXBackend,
+    items: list[dict[str, Any]],
+    expected: dict[str, set[str]],
+    *,
+    page: int | str | None,
+    max_completion_tokens: int,
+) -> dict[str, dict[str, Any]]:
+    batches = local_translation_batches(items)
+    merged: dict[str, dict[str, Any]] = {}
+    total = len(batches)
+    for index, batch in enumerate(batches, 1):
+        batch_expected = expected_for_items(batch)
+        print(
+            json.dumps(
+                {
+                    "event": "status",
+                    "message": f"本地翻译批次 {index}/{total}：{len(batch)} 个片段，{sum(len(item['words']) for item in batch)} 个单词",
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        partial, missing = _local_structured_call(
+            backend,
+            BATCH_TRANSLATOR_SYSTEM_PROMPT,
+            batch_translation_prompt(batch),
+            kind="page_translation",
+            page=page,
+            parser=lambda raw, batch_expected=batch_expected: parse_batch_translation_partial(raw, batch_expected),
+            schema=BATCH_TRANSLATION_SCHEMA,
+            max_completion_tokens=min(
+                max_completion_tokens,
+                max(1536, 512 + sum(len(item["words"]) for item in batch) * 112 + len(batch) * 160),
+            ),
+            batch_index=index,
+            batch_total=total,
+        )
+        if missing:
+            supplement_items, supplement_expected = missing_translation_items(batch, missing)
+            print(
+                json.dumps(
+                    {
+                        "event": "status",
+                        "message": f"本地翻译第 {index}/{total} 批漏掉 {sum(len(ids) for ids in missing.values())} 个单词，正在只补齐缺失项",
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            supplement = _local_structured_call(
+                backend,
+                BATCH_TRANSLATOR_SYSTEM_PROMPT,
+                batch_translation_prompt(supplement_items),
+                kind="page_translation",
+                page=page,
+                parser=lambda raw, supplement_expected=supplement_expected: parse_batch_translation(raw, supplement_expected),
+                schema=BATCH_TRANSLATION_SCHEMA,
+                max_completion_tokens=min(
+                    max_completion_tokens,
+                    max(1024, 256 + sum(len(ids) for ids in missing.values()) * 112),
+                ),
+                batch_index=index,
+                batch_total=total,
+            )
+            partial = merge_translation_supplement(partial, supplement)
+        validate_complete_candidates(partial, batch_expected)
+        for segment_id, candidate in partial.items():
+            if segment_id in merged:
+                raise ValueError(f"duplicate local translation segment: {segment_id}")
+            merged[segment_id] = candidate
+    validate_complete_candidates(merged, expected)
+    return merged
+
+
+def local_review_candidates(
+    backend: LocalMLXBackend,
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+    *,
+    page: int | str | None,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    review_items = build_review_items(items, candidates)
+    batches = local_translation_batches(review_items)
+    reviewed: dict[str, dict[str, Any]] = {}
+    any_review_failed = False
+    total = len(batches)
+    for index, batch in enumerate(batches, 1):
+        batch_expected = expected_for_items(batch)
+        batch_candidates = {item["id"]: candidates[item["id"]] for item in batch}
+        try:
+            result = _local_structured_call(
+                backend,
+                BATCH_REVIEWER_SYSTEM_PROMPT,
+                batch_review_prompt(batch),
+                kind="page_review",
+                page=page,
+                parser=lambda raw, batch_candidates=batch_candidates, batch_expected=batch_expected: parse_batch_review(
+                    raw, batch_candidates, batch_expected
+                ),
+                schema=BATCH_REVIEW_SCHEMA,
+                max_completion_tokens=max(
+                    512,
+                    128 + sum(len(item["words"]) for item in batch) * 32 + len(batch) * 48,
+                ),
+                batch_index=index,
+                batch_total=total,
+            )
+        except Exception as exc:
+            any_review_failed = True
+            result = fallback_review(batch_candidates)
+            print(
+                "[TRANSLATION REVIEW WARNING]",
+                json.dumps(
+                    {
+                        "request_type": "page_review",
+                        "page": page,
+                        "batch": index,
+                        "batch_total": total,
+                        "model": getattr(backend, "model", ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                        "fallback": "kept_validated_batch_translation",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        for segment_id, value in result.items():
+            if segment_id in reviewed:
+                raise ValueError(f"duplicate local review segment: {segment_id}")
+            reviewed[segment_id] = value
+    if set(reviewed) != set(candidates):
+        raise ValueError("local reviewer segment IDs do not match validated translation")
+    return reviewed, any_review_failed
+
+
 def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[str, Any]:
     raw_segments = content.get("segments", [])
     if not isinstance(raw_segments, list):
