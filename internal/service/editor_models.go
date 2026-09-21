@@ -57,6 +57,11 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 		return err
 	}
 	currentSettings := draftModelSettings(current)
+	if currentSettings.TranslationModel != settings.TranslationModel {
+		if err := s.ReleaseTranslationDaemonForModelSwitch(currentSettings.TranslationModel, settings.TranslationModel); err != nil {
+			return err
+		}
+	}
 	if currentSettings.TTSModel != settings.TTSModel {
 		// Release an idle resident model immediately. The transaction below
 		// still performs the authoritative queued/running job check.
