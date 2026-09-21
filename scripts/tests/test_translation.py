@@ -715,6 +715,47 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "世界")
 
+    def test_local_translation_prompt_contains_exact_output_skeleton(self):
+        from translate_page import local_translation_prompt
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Listen and repeat.",
+            "target_text": "Listen and repeat.",
+            "words": [
+                {"id": "w0", "text": "Listen", "phonetic": ""},
+                {"id": "w1", "text": "and", "phonetic": ""},
+                {"id": "w2", "text": "repeat", "phonetic": ""},
+            ],
+        }]
+        prompt = local_translation_prompt(items)
+        self.assertIn("OUTPUT TEMPLATE:", prompt)
+        template_text = prompt.split("OUTPUT TEMPLATE:\n", 1)[1]
+        template = json.loads(template_text)
+        self.assertEqual(len(template["segments"]), 1)
+        self.assertEqual(len(template["segments"][0]["words"]), 3)
+        self.assertEqual(
+            template["segments"][0]["words"],
+            [
+                {"meaning": "", "phonetic": ""},
+                {"meaning": "", "phonetic": ""},
+                {"meaning": "", "phonetic": ""},
+            ],
+        )
+
+    def test_local_translation_rejects_prose_wrapped_or_inner_json(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello.",
+            "target_text": "Hello.",
+            "words": [{"id": "w0", "text": "Hello", "phonetic": ""}],
+        }]
+        raw = 'prefix {"segments":[{"translation":"你好","words":[{"meaning":"你好","phonetic":"həˈloʊ"}]}]} suffix'
+        with self.assertRaises(json.JSONDecodeError):
+            parse_local_translation(raw, items)
+
     def test_local_translation_accepts_empty_word_placeholders(self):
         from translate_page import parse_local_translation
 
