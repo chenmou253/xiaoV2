@@ -46,12 +46,12 @@ type EditorService struct {
 	audioOut         *bufio.Scanner
 	audioDaemonModel string
 
-	translationMu           sync.Mutex
-	translationProcessMu    sync.Mutex
-	translationCmd          *exec.Cmd
-	translationIn           io.WriteCloser
-	translationOut          *bufio.Scanner
-	translationDaemonModel  string
+	translationMu          sync.Mutex
+	translationProcessMu   sync.Mutex
+	translationCmd         *exec.Cmd
+	translationIn          io.WriteCloser
+	translationOut         *bufio.Scanner
+	translationDaemonModel string
 
 	// audioRestartMu closes the small gap between claiming an audio job and
 	// registering it as the in-process job.  Without it, a restart request
@@ -1499,6 +1499,12 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 }
 
 func (s *EditorService) RunWorker(ctx context.Context) error {
+	// A force-killed process cannot finalize its running job. Recover those
+	// jobs before claiming new work; otherwise the worker only looks at queued
+	// jobs and the UI remains stuck on "处理中" forever.
+	if err := s.recoverInterruptedJobs(ctx); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1523,6 +1529,55 @@ func (s *EditorService) RunWorker(ctx context.Context) error {
 		}
 	}
 }
+
+func (s *EditorService) recoverInterruptedJobs(ctx context.Context) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var jobs []model.TextbookJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("status=?", "running").Order("id").Find(&jobs).Error; err != nil {
+			return err
+		}
+		for _, job := range jobs {
+			result := tx.Model(&model.TextbookJob{}).
+				Where("id=? AND status=?", job.ID, "running").
+				Updates(map[string]any{
+					"status":       "queued",
+					"progress":     0,
+					"error":        "服务中断，任务已自动重新排队",
+					"request_id":   "",
+					"available_at": nil,
+					"started_at":   nil,
+					"finished_at":  nil,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				continue
+			}
+
+			if job.Kind == "audio-item" {
+				if err := tx.Model(&model.TextbookAudioItem{}).
+					Where("active_job_id=?", job.ID).
+					Updates(map[string]any{"status": "queued", "revision": gorm.Expr("revision+1")}).Error; err != nil {
+					return err
+				}
+			}
+			draftStatus := "converting"
+			if job.Kind == "translate" {
+				draftStatus = "translating"
+			} else if strings.HasPrefix(job.Kind, "audio") {
+				draftStatus = "audio"
+			}
+			if err := tx.Model(&model.TextbookDraft{}).Where("id=?", job.DraftID).
+				Updates(map[string]any{"status": draftStatus, "version": gorm.Expr("version+1")}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 	var job model.TextbookJob
 	e := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -2099,11 +2154,11 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	job.Progress, job.Total = 2, 2
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{
-			"content": string(translated),
+			"content":           string(translated),
 			"translation_model": modelID,
-			"checked": false,
-			"audio_checked": false,
-			"version": gorm.Expr("version+1"),
+			"checked":           false,
+			"audio_checked":     false,
+			"version":           gorm.Expr("version+1"),
 		}).Error; e != nil {
 			return e
 		}
