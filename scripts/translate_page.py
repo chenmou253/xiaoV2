@@ -122,15 +122,25 @@ LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translati
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
 
-The input contains an ordered "items" array. Each item contains one target sentence, its context, and an ordered words array.
+The input contains:
+- segment_count: the exact number of sentence segments.
+- items: sentence segments identified ONLY by temporary zero-based segment_index.
+- word_count: the exact number of words inside that segment.
+- words: words identified ONLY by temporary zero-based word_index.
+
+These temporary numeric indexes are not source/business IDs. Copy them exactly.
+
 Return exactly this shape:
-{"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
+{"segments":[{"segment_index":0,"translation":"...","words":[{"word_index":0,"meaning":"...","phonetic":"..."}]}]}
 
 Critical structure rules:
-- NEVER output segment IDs or word IDs.
-- Output exactly one segments element for every input item, in the same order.
-- Inside each segment, output exactly one words element for every input word, in the same order.
-- Never add, omit, merge, split, or reorder segments or words.
+- NEVER output or invent source IDs such as p54-s0 or p54-s0-w0.
+- Return exactly segment_count segment objects.
+- Return every segment_index from 0 through segment_count-1 exactly once.
+- For each segment, return exactly word_count word objects.
+- Return every word_index from 0 through word_count-1 exactly once.
+- Do not add, omit, merge, duplicate, or renumber any segment or word.
+- Order may vary because segment_index and word_index are authoritative.
 - Every translation and meaning must be a JSON string.
 - Every phonetic must be a JSON string.
 
@@ -177,6 +187,7 @@ LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
+                    "segment_index": {"type": "integer", "minimum": 0},
                     "translation": {"type": "string"},
                     "words": {
                         "type": "array",
@@ -184,14 +195,15 @@ LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
                             "type": "object",
                             "additionalProperties": False,
                             "properties": {
+                                "word_index": {"type": "integer", "minimum": 0},
                                 "meaning": {"type": "string"},
                                 "phonetic": {"type": "string"},
                             },
-                            "required": ["meaning", "phonetic"],
+                            "required": ["word_index", "meaning", "phonetic"],
                         },
                     },
                 },
-                "required": ["translation", "words"],
+                "required": ["segment_index", "translation", "words"],
             },
         }
     },
@@ -956,25 +968,30 @@ class LocalStructureError(ValueError):
 
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     payload = {
+        "segment_count": len(items),
         "items": [
             {
+                "segment_index": segment_index,
                 "context": item["context"],
                 "target_text": item["target_text"],
+                "word_count": len(item["words"]),
                 "words": [
                     {
+                        "word_index": word_index,
                         "text": word["text"],
                         "phonetic": word.get("phonetic", ""),
                     }
-                    for word in item["words"]
+                    for word_index, word in enumerate(item["words"])
                 ],
             }
-            for item in items
-        ]
+            for segment_index, item in enumerate(items)
+        ],
     }
     return (
-        "Translate the following ordered textbook data. "
-        "Do not output or reconstruct any source IDs. "
-        "Keep the number and order of segments and words exactly unchanged.\n\n"
+        "Translate the following textbook data. "
+        "Use only the temporary numeric indexes shown in the payload. "
+        "Never output or reconstruct any source/business IDs. "
+        "Return every segment_index and word_index exactly once.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -994,28 +1011,81 @@ def parse_local_translation(
             f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
         )
 
+    by_segment_index: dict[int, dict[str, Any]] = {}
+    for raw_segment in raw_segments:
+        required = {"segment_index", "translation", "words"}
+        if not isinstance(raw_segment, dict) or set(raw_segment) != required:
+            raise LocalStructureError("local translator segment has an invalid shape")
+        segment_index = raw_segment.get("segment_index")
+        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
+            raise LocalStructureError("local translator segment_index must be an integer")
+        if segment_index < 0 or segment_index >= len(items):
+            raise LocalStructureError(
+                f"local translator segment_index out of range: {segment_index}"
+            )
+        if segment_index in by_segment_index:
+            raise LocalStructureError(
+                f"local translator duplicate segment_index: {segment_index}"
+            )
+        by_segment_index[segment_index] = raw_segment
+
+    expected_segment_indexes = set(range(len(items)))
+    if set(by_segment_index) != expected_segment_indexes:
+        raise LocalStructureError(
+            "local translator segment indexes do not exactly match the input"
+        )
+
     result: dict[str, dict[str, Any]] = {}
-    for segment_index, (raw_segment, item) in enumerate(zip(raw_segments, items)):
-        if not isinstance(raw_segment, dict) or set(raw_segment) != {"translation", "words"}:
-            raise LocalStructureError(f"local translator segment {segment_index} has an invalid shape")
+    for segment_index, item in enumerate(items):
+        raw_segment = by_segment_index[segment_index]
         translation = clean_translation(raw_segment.get("translation", ""))
         if not translation:
-            raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+            raise ValueError(
+                f"local translator returned empty translation at segment {segment_index}"
+            )
         raw_words = raw_segment.get("words")
         if not isinstance(raw_words, list):
-            raise LocalStructureError(f"local translator words must be an array at segment {segment_index}")
+            raise LocalStructureError(
+                f"local translator words must be an array at segment {segment_index}"
+            )
         expected_words = item["words"]
         if len(raw_words) != len(expected_words):
             raise LocalStructureError(
                 f"local translator word count mismatch at segment {segment_index}: "
                 f"got {len(raw_words)}, want {len(expected_words)}"
             )
-        words: dict[str, dict[str, str]] = {}
-        for word_index, (raw_word, source_word) in enumerate(zip(raw_words, expected_words)):
-            if not isinstance(raw_word, dict) or set(raw_word) != {"meaning", "phonetic"}:
+
+        by_word_index: dict[int, dict[str, Any]] = {}
+        for raw_word in raw_words:
+            required_word = {"word_index", "meaning", "phonetic"}
+            if not isinstance(raw_word, dict) or set(raw_word) != required_word:
                 raise LocalStructureError(
-                    f"local translator word {segment_index}:{word_index} has an invalid shape"
+                    f"local translator word at segment {segment_index} has an invalid shape"
                 )
+            word_index = raw_word.get("word_index")
+            if not isinstance(word_index, int) or isinstance(word_index, bool):
+                raise LocalStructureError(
+                    f"local translator word_index must be an integer at segment {segment_index}"
+                )
+            if word_index < 0 or word_index >= len(expected_words):
+                raise LocalStructureError(
+                    f"local translator word_index out of range: {segment_index}:{word_index}"
+                )
+            if word_index in by_word_index:
+                raise LocalStructureError(
+                    f"local translator duplicate word_index: {segment_index}:{word_index}"
+                )
+            by_word_index[word_index] = raw_word
+
+        expected_word_indexes = set(range(len(expected_words)))
+        if set(by_word_index) != expected_word_indexes:
+            raise LocalStructureError(
+                f"local translator word indexes do not exactly match segment {segment_index}"
+            )
+
+        words: dict[str, dict[str, str]] = {}
+        for word_index, source_word in enumerate(expected_words):
+            raw_word = by_word_index[word_index]
             meaning = clean_translation(raw_word.get("meaning", ""))
             if not meaning:
                 raise ValueError(
@@ -1042,27 +1112,31 @@ def local_review_prompt(
     candidates: dict[str, dict[str, Any]],
 ) -> str:
     payload = {
+        "segment_count": len(items),
         "segments": [
             {
+                "segment_index": segment_index,
                 "context": item["context"],
                 "target_text": item["target_text"],
                 "candidate_translation": candidates[item["id"]]["translation"],
+                "word_count": len(item["words"]),
                 "words": [
                     {
+                        "word_index": word_index,
                         "text": word["text"],
                         "candidate_meaning": candidates[item["id"]]["words"][word["id"]]["meaning"],
                         "candidate_phonetic": candidates[item["id"]]["words"][word["id"]]["phonetic"],
                     }
-                    for word in item["words"]
+                    for word_index, word in enumerate(item["words"])
                 ],
             }
-            for item in items
-        ]
+            for segment_index, item in enumerate(items)
+        ],
     }
     return (
-        "Review the following ordered textbook translation candidates. "
-        "Refer to items only by zero-based segment_index and word_index. "
-        "Do not output or reconstruct source IDs.\n\n"
+        "Review the following textbook translation candidates. "
+        "Refer to content only by the temporary zero-based segment_index and word_index. "
+        "Never output or reconstruct source/business IDs.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
