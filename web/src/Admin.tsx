@@ -1205,6 +1205,8 @@ function Drafts({
   const currentOCRReviewed = !!page?.checked && !currentHasIssues;
   const currentAudioReviewed = !!page?.audio_checked && !currentHasIssues && !currentHasAudioIssues;
   const currentReviewed = currentOCRReviewed && currentAudioReviewed;
+  const textConfirmedCount = pages.filter((item: Row) => !!item.checked).length;
+  const audioPendingCount = pages.filter((item: Row) => !!item.checked && !item.audio_checked).length;
   const editingSelectedDraft = !!id && detail?.draft?.id === id;
   const selectedDraftLoading = !!id && !editingSelectedDraft;
   const americanEnabled = editingSelectedDraft
@@ -1303,14 +1305,17 @@ function Drafts({
 
   async function queueAudio() {
     if (!audioRequired) {
-      notice("当前草稿已关闭所有发音，本页只确认 OCR，不会生成音频");
+      notice("当前草稿已关闭所有发音，本页无需生成音频");
+      return;
+    }
+    if (!currentOCRReviewed) {
+      notice("请先确认本页文字，再生成音频");
       return;
     }
     await run(async () => {
-      const latest = await savePageReview("", "ocr");
-      await action("audio", "", latest.draft.version, pageNo);
+      await action("audio", "", detail.draft.version, pageNo);
       await loadDetail(id, pageNo);
-      notice(`第 ${pageNo} 页 OCR 已确认，已启用的发音音频已进入生成队列`);
+      notice(`第 ${pageNo} 页已确认文字的音频已进入生成队列`);
     });
   }
   async function queuePageAudioReplacement() {
@@ -1385,14 +1390,45 @@ function Drafts({
     });
     setTranslationSubmitting(false);
   }
+  async function confirmTextAndContinue() {
+    const next = lastPage + 1;
+    await run(async () => {
+      // Save visible edits first. A real content edit invalidates old audio,
+      // but it never forces a new OCR run. The explicit confirm-text action
+      // then validates the persisted page and locks the text stage.
+      const saved = await savePageReview("", "none");
+      await action("confirm-text", "", saved.draft.version, pageNo);
+      const confirmed = await loadDetail(id, pageNo);
+      if (currentIsLast && sourcePageCount > lastPage) {
+        await action("next-page", "", confirmed.draft.version, pageNo);
+        setWaitingPage(next);
+        await loadDetail(id, next);
+        notice(`第 ${pageNo} 页文字已确认；第 ${next} 页 OCR 已进入队列。音频可稍后批量生成。`);
+        return;
+      }
+      notice(`第 ${pageNo} 页文字已确认；音频可稍后单独或批量生成。`);
+    });
+  }
+
   async function queueNextPage() {
     const next = lastPage + 1;
     await run(async () => {
-      const latest = await savePageReview("", "audio");
-      await action("next-page", "", latest.draft.version);
+      await action("next-page", "", detail.draft.version, pageNo);
       setWaitingPage(next);
       await loadDetail(id, next);
-      notice(`第 ${next} 页已进入单页生成队列`);
+      notice(`第 ${next} 页 OCR 已进入队列；无需等待上一页音频。`);
+    });
+  }
+
+  async function queuePendingAudio() {
+    if (!audioRequired) {
+      notice("当前草稿已关闭所有发音，无需生成音频");
+      return;
+    }
+    await run(async () => {
+      await action("audio-missing", "", detail.draft.version);
+      await loadDetail(id, pageNo);
+      notice("已确认文字页面的缺失音频已进入批量生成队列");
     });
   }
   async function queueReOCR(targetPage: number) {
@@ -1413,34 +1449,21 @@ function Drafts({
     });
   }
   async function approveWithoutAudio() {
-    const next = lastPage + 1;
-    const reason = currentHasOCRContent
-      ? "本页片段均设置为不生成音频"
-      : "本页没有可朗读 OCR 内容";
-    await run(async () => {
-      // A previous attempt may already have saved the page but failed
-      // before queuing the next OCR job.  In that case, reuse the current
-      // draft version and only resume the missing next-page action.
-      const latest = currentReviewed
-        ? detail
-        : await savePageReview("", "audio");
-      if (audioFreePageNeedsNext) {
-        await action("next-page", "", latest.draft.version);
-        setWaitingPage(next);
-        await loadDetail(id, next);
-        notice(`第 ${pageNo} 页已跳过音频并生成第 ${next} 页 OCR`);
-        return;
-      }
-      notice(`${reason}，审核已确认并跳过音频`);
-    });
+    if (!currentOCRReviewed) {
+      await confirmTextAndContinue();
+      return;
+    }
+    if (!currentAudioReviewed) {
+      await run(() => savePageReview("本页文字已确认且无需音频", "audio"));
+    }
   }
   return (
     <>
       <section className="admin-panel">
         <h2>PDF 教材逐页工作流</h2>
         <p>
-          上传后仅生成第 1 页 OCR（含单词坐标与置信度）；OCR 确认后按已启用的口音生成音频，
-          完成试听确认后才能生成下一页。
+          上传后逐页完成 OCR、翻译与文字审核；本页文字确认后即可继续下一页，不再等待音频。
+          音频作为独立阶段，可按页生成或批量补齐，发布前再完成试听确认。
         </p>
         {can("content.write") && (
           <form
@@ -1735,7 +1758,7 @@ function Drafts({
           <div className="action-row">
             {detail.draft.status === "draft" && can("content.write") && (
               <>
-                {lastPage > 0 && sourcePageCount > lastPage && currentAudioReviewed && (
+                {lastPage > 0 && sourcePageCount > lastPage && currentOCRReviewed && (
                   <button
                     className="admin-primary"
                     disabled={processing || !currentIsLast || currentHasIssues}
@@ -1748,7 +1771,16 @@ function Drafts({
                     }
                     onClick={() => void queueNextPage()}
                   >
-                    确认音频并生成第 {lastPage + 1} 页 OCR
+                    继续生成第 {lastPage + 1} 页 OCR
+                  </button>
+                )}
+                {audioRequired && textConfirmedCount > 0 && !configuredAudioReady && (
+                  <button
+                    disabled={processing}
+                    onClick={() => void queuePendingAudio()}
+                    title="只处理文字已经确认且当前缺失音频的页面；未确认文字的页面不会进入 TTS"
+                  >
+                    批量补齐已确认页面音频{audioPendingCount > 0 ? `（${audioPendingCount} 页待确认）` : ""}
                   </button>
                 )}
                 <button
@@ -1817,9 +1849,13 @@ function Drafts({
                       onClick={() => setPageNo(item.position)}
                     >
                       第 {item.position} 页{" "}
-                      {item.checked && item.audio_checked ? "✓ 已确认" : "待审核"}
+                      {!item.checked
+                        ? "文字待审核"
+                        : item.audio_checked
+                          ? "✓ 全部完成"
+                          : "✓ 文字已确认 · 音频待处理"}
                     </button>
-                    <small className="draft-page-model">{item.checked && item.audio_checked ? "已锁定" : "未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
+                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
                   </div>
                 ))}
               </aside>
@@ -1889,23 +1925,17 @@ function Drafts({
                   )}
                   <p className="admin-note">
                     审核状态：
-                    {!currentHasAudioContent
-                      ? currentHasOCRContent
-                        ? "本页片段均设置为不生成音频，可直接审核通过"
-                        : "本页没有可朗读 OCR 内容，可直接审核通过并跳过音频"
-                      : currentReviewed
-                      ? audioRequired
-                        ? `本页 OCR 与${enabledAccentLabel}均已确认`
-                        : "本页 OCR 已确认（已跳过音频）"
-                      : currentHasAudioIssues
-                        ? `本页有 ${audioIssues.length} 个音频需要单独处理`
-                      : currentOCRReviewed
-                        ? audioGeneratedForCurrent
-                          ? audioRequired
-                            ? `OCR 已确认，待试听并确认${enabledAccentLabel}`
-                            : "OCR 已确认，待点击确认跳过音频"
-                          : `OCR 已确认，待生成${enabledAccentLabel}`
-                        : "待确认 OCR 正文、坐标与置信度"}
+                    {!currentOCRReviewed
+                      ? "文字待确认：请核对 OCR 正文、坐标、翻译与音标"
+                      : !currentHasAudioContent || !audioRequired
+                        ? "文字已确认，本页无需音频"
+                        : currentHasAudioIssues
+                          ? `文字已确认 · ${audioIssues.length} 个音频需要处理`
+                          : !audioGeneratedForCurrent
+                            ? `文字已确认 · ${enabledAccentLabel}待生成`
+                            : !currentAudioReviewed
+                              ? `文字已确认 · ${enabledAccentLabel}待试听确认`
+                              : `文字与${enabledAccentLabel}均已确认`}
                   </p>
                   <div className="action-row">
                     <button
@@ -1971,76 +2001,49 @@ function Drafts({
                           ? "请先补全并保存页面中的待完成内容"
                           : currentHasAudioIssues
                             ? `进入异常处理，逐项处理剩余的 ${audioIssues.length} 个失败音频`
-                          : !currentHasAudioContent
-                            ? audioFreePageNeedsNext
-                              ? `本页无需生成音频，将审核通过并生成第 ${lastPage + 1} 页 OCR`
-                              : currentHasOCRContent
-                                ? "本页片段均设置为不生成音频，将直接审核通过"
-                                : "本页没有可朗读 OCR 内容，将跳过音频生成"
                             : !currentOCRReviewed
-                            ? audioGeneratedForCurrent
-                              ? "先确认 OCR 正文、坐标与置信度"
-                              : `确认 OCR 后才会生成本页${enabledAccentLabel}`
-                            : !audioGeneratedForCurrent
-                              ? `OCR 已确认，现在生成本页${enabledAccentLabel}`
-                              : !audioRequired
-                                ? "当前草稿已关闭发音，本页将跳过音频"
-                                : `试听${enabledAccentLabel}后再确认`
+                              ? currentIsLast && sourcePageCount > lastPage
+                                ? `确认本页文字并继续第 ${lastPage + 1} 页 OCR；音频稍后处理`
+                                : "确认本页文字；音频作为独立阶段稍后处理"
+                              : !currentHasAudioContent || !audioRequired
+                                ? "本页文字已确认且无需音频"
+                                : !audioGeneratedForCurrent
+                                  ? `生成本页${enabledAccentLabel}`
+                                  : !currentAudioReviewed
+                                    ? `试听后确认本页${enabledAccentLabel}`
+                                    : "本页文字和音频均已完成"
                       }
                       onClick={() => {
                         if (currentHasAudioIssues) {
                           openAudioReview(id, pageNo);
-                        } else if (!currentHasAudioContent) {
-                          void approveWithoutAudio();
                         } else if (!currentOCRReviewed) {
-                          if (audioGeneratedForCurrent) {
-                            void run(() => savePageReview("本页 OCR 已确认", "ocr"));
-                          } else {
-                            void queueAudio();
-                          }
+                          void confirmTextAndContinue();
+                        } else if (!currentHasAudioContent || !audioRequired) {
+                          void approveWithoutAudio();
                         } else if (!audioGeneratedForCurrent) {
                           void queueAudio();
                         } else if (!currentAudioReviewed) {
-                          if (currentIsLast && sourcePageCount > lastPage) {
-                            void queueNextPage();
-                          } else {
-                            void run(() =>
-                              savePageReview(
-                                audioRequired ? `本页${enabledAccentLabel}已确认` : "本页 OCR 已确认（已跳过音频）",
-                                "audio",
-                              ),
-                            );
-                          }
+                          void run(() =>
+                            savePageReview(`本页${enabledAccentLabel}已确认`, "audio"),
+                          );
                         }
                       }}
                     >
                       {currentHasAudioIssues
                         ? `处理 ${audioIssues.length} 个失败音频`
-                        : !currentHasAudioContent
-                        ? audioFreePageNeedsNext
-                          ? currentReviewed
-                            ? `继续生成第 ${lastPage + 1} 页 OCR`
-                            : `审核通过并生成第 ${lastPage + 1} 页 OCR`
-                          : currentHasOCRContent
-                            ? "审核通过（本页不生成音频）"
-                            : "审核通过（跳过音频）"
                         : !currentOCRReviewed
-                        ? audioGeneratedForCurrent
-                          ? "确认本页 OCR"
-                          : audioRequired
-                            ? `确认 OCR 并生成${enabledAccentLabel}`
-                            : "确认本页 OCR（跳过音频）"
-                        : !audioGeneratedForCurrent
-                          ? `生成本页${enabledAccentLabel}`
-                          : !currentAudioReviewed
-                            ? currentIsLast && sourcePageCount > lastPage
-                              ? audioRequired
-                                ? `确认${enabledAccentLabel}并生成第 ${lastPage + 1} 页 OCR`
-                                : `确认本页并生成第 ${lastPage + 1} 页 OCR`
-                              : audioRequired
+                          ? currentIsLast && sourcePageCount > lastPage
+                            ? `确认文字并生成第 ${lastPage + 1} 页 OCR`
+                            : "确认本页文字"
+                          : !currentHasAudioContent || !audioRequired
+                            ? currentAudioReviewed
+                              ? "本页文字已确认（无需音频）"
+                              : "确认本页无需音频"
+                            : !audioGeneratedForCurrent
+                              ? `生成本页${enabledAccentLabel}`
+                              : !currentAudioReviewed
                                 ? `确认本页${enabledAccentLabel}`
-                                : "确认本页（跳过音频）"
-                            : "本页审核已完成"}
+                                : "本页已全部完成"}
                     </button>
                   </div>
                 </div>
