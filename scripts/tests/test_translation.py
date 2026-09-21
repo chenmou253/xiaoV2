@@ -796,10 +796,11 @@ class TranslationTests(unittest.TestCase):
             )
         self.assertEqual(calls["count"], 2)
 
-    def test_local_structured_call_does_not_retry_count_mismatch(self):
+    def test_local_structured_call_retries_structure_mismatch_once_without_splitting(self):
         from translate_page import (
             LOCAL_TRANSLATION_SCHEMA,
             LocalMLXBackend,
+            LocalStructureError,
             _local_structured_call,
         )
 
@@ -818,18 +819,18 @@ class TranslationTests(unittest.TestCase):
             return '{"segments":[]}'
 
         backend.generate_structured = generate_structured
-        with self.assertRaisesRegex(ValueError, "count mismatch"):
+        with self.assertRaisesRegex(LocalStructureError, "count mismatch"):
             _local_structured_call(
                 backend,
                 "system",
                 "prompt",
                 kind="page_translation",
                 page=7,
-                parser=lambda raw: (_ for _ in ()).throw(ValueError("count mismatch")),
+                parser=lambda raw: (_ for _ in ()).throw(LocalStructureError("count mismatch")),
                 schema=LOCAL_TRANSLATION_SCHEMA,
                 max_completion_tokens=512,
             )
-        self.assertEqual(calls["count"], 1)
+        self.assertEqual(calls["count"], 2)
 
 
     def test_batch_translation_accepts_leading_zero_id_variants(self):
