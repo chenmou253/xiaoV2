@@ -628,6 +628,10 @@ class TranslationTests(unittest.TestCase):
         self.assertNotIn("p54-s0", prompt)
         self.assertNotIn("p54-s0-w0", prompt)
         self.assertIn("Hello world.", prompt)
+        self.assertIn('"segment_count":1', prompt)
+        self.assertIn('"segment_index":0', prompt)
+        self.assertIn('"word_count":2', prompt)
+        self.assertIn('"word_index":0', prompt)
         self.assertIn('"text":"Hello"', prompt)
 
     def test_local_translation_maps_results_back_by_position(self):
@@ -645,10 +649,11 @@ class TranslationTests(unittest.TestCase):
         raw = json.dumps(
             {
                 "segments": [{
+                    "segment_index": 0,
                     "translation": "你好，世界。",
                     "words": [
-                        {"meaning": "你好", "phonetic": "həˈloʊ"},
-                        {"meaning": "世界", "phonetic": "wɝːld"},
+                        {"word_index": 0, "meaning": "你好", "phonetic": "həˈloʊ"},
+                        {"word_index": 1, "meaning": "世界", "phonetic": "wɝːld"},
                     ],
                 }]
             },
@@ -674,14 +679,53 @@ class TranslationTests(unittest.TestCase):
         raw = json.dumps(
             {
                 "segments": [{
+                    "segment_index": 0,
                     "translation": "你好，世界。",
-                    "words": [{"meaning": "你好", "phonetic": "həˈloʊ"}],
+                    "words": [{"word_index": 0, "meaning": "你好", "phonetic": "həˈloʊ"}],
                 }]
             },
             ensure_ascii=False,
         )
         with self.assertRaisesRegex(ValueError, "word count mismatch"):
             parse_local_translation(raw, items)
+
+    def test_local_translation_uses_temporary_indexes_as_authority(self):
+        from translate_page import parse_local_translation
+
+        items = [
+            {
+                "id": "p54-s0",
+                "context": "First.",
+                "target_text": "First.",
+                "words": [{"id": "p54-s0-w0", "text": "First", "phonetic": ""}],
+            },
+            {
+                "id": "p54-s1",
+                "context": "Second.",
+                "target_text": "Second.",
+                "words": [{"id": "p54-s1-w0", "text": "Second", "phonetic": ""}],
+            },
+        ]
+        raw = json.dumps(
+            {
+                "segments": [
+                    {
+                        "segment_index": 1,
+                        "translation": "第二。",
+                        "words": [{"word_index": 0, "meaning": "第二", "phonetic": "ˈsɛkənd"}],
+                    },
+                    {
+                        "segment_index": 0,
+                        "translation": "第一。",
+                        "words": [{"word_index": 0, "meaning": "第一", "phonetic": "fɝːst"}],
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["translation"], "第一。")
+        self.assertEqual(parsed["p54-s1"]["translation"], "第二。")
 
     def test_local_review_uses_indexes_not_ids(self):
         from translate_page import local_review_prompt, parse_local_review
@@ -733,8 +777,8 @@ class TranslationTests(unittest.TestCase):
         backend.attempt = 1
         backend.status_callback = None
         responses = iter([
-            '{"segments":[{"translation":"你好" "words":[]}]}',
-            '{"segments":[{"translation":"你好","words":[]}]}',
+            '{"segments":[{"segment_index":0,"translation":"你好" "words":[]}]}',
+            '{"segments":[{"segment_index":0,"translation":"你好","words":[]}]}',
         ])
 
         def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
@@ -780,7 +824,7 @@ class TranslationTests(unittest.TestCase):
         def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
             del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
             calls["count"] += 1
-            return '{"segments":[{"translation":"坏掉" "words":[]}]}'
+            return '{"segments":[{"segment_index":0,"translation":"坏掉" "words":[]}]}'
 
         backend.generate_structured = generate_structured
         with self.assertRaises(json.JSONDecodeError):
