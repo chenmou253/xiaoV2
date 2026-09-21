@@ -1871,7 +1871,7 @@ function Drafts({
                           ? "✓ 全部完成"
                           : "✓ 文字已确认 · 音频待处理"}
                     </button>
-                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.translation_model || detail.draft.translation_model || "qwen3.7-flash"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
+                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
                   </div>
                 ))}
               </aside>
