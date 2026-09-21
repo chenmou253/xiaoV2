@@ -23,8 +23,6 @@ from typing import Any, Callable, Protocol
 
 
 MAX_TRANSLATION_COMPLETION_TOKENS = 131072
-LOCAL_BATCH_MAX_SEGMENTS = 4
-LOCAL_BATCH_MAX_WORDS = 20
 
 
 def configured_translation_completion_tokens() -> int:
@@ -118,6 +116,110 @@ BATCH_REVIEWER_SYSTEM_PROMPT = (
     + "Reject British/non-rhotic variants when pronunciations differ; require post-vocalic /r/ and American /oʊ/ rather than British /əʊ/. "
     + "Correct an omitted, dialect-mismatched, or otherwise incorrect phonetic when you can determine it. Keep reasons brief and suggestions limited to the corrected field. Never output reasoning, Markdown, or a code fence."
 )
+
+LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translation engine for children's English textbooks.
+
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
+
+The input contains an ordered "items" array. Each item contains one target sentence, its context, and an ordered words array.
+Return exactly this shape:
+{"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
+
+Critical structure rules:
+- NEVER output segment IDs or word IDs.
+- Output exactly one segments element for every input item, in the same order.
+- Inside each segment, output exactly one words element for every input word, in the same order.
+- Never add, omit, merge, split, or reorder segments or words.
+- Every translation and meaning must be a JSON string.
+- Every phonetic must be a JSON string.
+
+Translation rules:
+- Translate only target_text into concise natural Simplified Chinese suitable for Chinese students.
+- Use context only to resolve ambiguity; never translate extra context.
+- Preserve meaning, negation, names, numbers, dates, times, and factual information.
+- For each word, return a concise Simplified Chinese dictionary-style meaning for that exact occurrence and grammatical role.
+- Do not return the whole sentence as a word meaning.
+- For every pronounceable English word, return General American English IPA with stress where appropriate.
+- Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
+- Return an empty phonetic string only when the source is not pronounceable as an English word.
+"""
+
+LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structured children's English textbook translations.
+
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
+
+The input contains ordered candidate segments and ordered candidate words. Do NOT output any source IDs.
+Return exactly:
+{"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
+
+Rules:
+- Return {"issues":[]} when everything is acceptable.
+- segment_index is the zero-based position in the supplied segments array.
+- For sentence translation issues, word_index MUST be -1 and field MUST be "translation".
+- For word issues, word_index is the zero-based word position inside that segment and field MUST be "meaning" or "phonetic".
+- Never invent an index outside the supplied arrays.
+- Include only actual errors.
+- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and information not present in the source.
+- Check that each word meaning is a standalone lexical gloss for that exact occurrence.
+- Check that phonetics are General American English IPA, including stress where appropriate, with rhotic /r/ and American /oʊ/ where applicable.
+- suggestion contains only the corrected value for the named field.
+"""
+
+LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "translation": {"type": "string"},
+                    "words": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "meaning": {"type": "string"},
+                                "phonetic": {"type": "string"},
+                            },
+                            "required": ["meaning", "phonetic"],
+                        },
+                    },
+                },
+                "required": ["translation", "words"],
+            },
+        }
+    },
+    "required": ["segments"],
+}
+
+LOCAL_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "segment_index": {"type": "integer", "minimum": 0},
+                    "word_index": {"type": "integer", "minimum": -1},
+                    "field": {"type": "string", "enum": ["translation", "meaning", "phonetic"]},
+                    "reason": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+                "required": ["segment_index", "word_index", "field", "reason", "suggestion"],
+            },
+        }
+    },
+    "required": ["issues"],
+}
 
 SINGLE_REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -920,8 +1022,9 @@ def _local_structured_call(
             if attempt == 2:
                 retry_instruction = (
                     "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
-                    "Regenerate this same batch from scratch. Return ONLY one complete "
-                    "JSON object matching the schema. Keep every supplied ID exactly once."
+                    "Regenerate the same request from scratch. Return ONLY one complete "
+                    "JSON object matching the schema. Preserve every supplied array length "
+                    "and position exactly; do not add or omit any item."
                 )
             raw = _generate_once(
                 backend,
