@@ -630,6 +630,43 @@ class TranslationTests(unittest.TestCase):
         self.assertIn("Hello world.", prompt)
         self.assertIn('"text":"Hello"', prompt)
 
+    def test_local_translation_batches_are_fixed_at_three_segments(self):
+        from translate_page import _local_item_batches
+
+        items = [{"id": f"s{index}", "target_text": str(index), "context": "", "words": []}
+                 for index in range(7)]
+        batches = _local_item_batches(items)
+        self.assertEqual([len(batch) for batch in batches], [3, 3, 1])
+        self.assertEqual(
+            [[item["id"] for item in batch] for batch in batches],
+            [["s0", "s1", "s2"], ["s3", "s4", "s5"], ["s6"]],
+        )
+
+    def test_local_translation_prompt_uses_one_shared_context(self):
+        from translate_page import local_translation_prompt
+
+        items = [
+            {
+                "id": "s0",
+                "context": "ignored repeated page context",
+                "target_text": "First sentence.",
+                "words": [{"id": "w0", "text": "First", "phonetic": ""}],
+            },
+            {
+                "id": "s1",
+                "context": "ignored repeated page context",
+                "target_text": "Second sentence.",
+                "words": [{"id": "w1", "text": "Second", "phonetic": ""}],
+            },
+        ]
+        prompt = local_translation_prompt(items)
+        payload = json.loads(prompt.split("\n\n", 1)[1])
+        self.assertEqual(payload["context"], "First sentence.\nSecond sentence.")
+        self.assertNotIn("context", payload["items"][0])
+        self.assertNotIn("context", payload["items"][1])
+        self.assertEqual(payload["items"][0]["target_text"], "First sentence.")
+        self.assertEqual(payload["items"][1]["target_text"], "Second sentence.")
+
     def test_local_translation_maps_results_back_by_position(self):
         from translate_page import parse_local_translation
 
