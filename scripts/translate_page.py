@@ -783,6 +783,98 @@ def batch_review_prompt(items: list[dict[str, Any]]) -> str:
     )
 
 
+
+def parse_batch_translation_partial(
+    value: Any, expected: dict[str, set[str]]
+) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+    """Parse a local-model page response without accepting any wrong IDs.
+
+    Missing segments/words are reported for one targeted local completion.
+    Unexpected/duplicate IDs, invalid meanings, or invalid phonetics remain hard
+    failures so we never silently associate a translation with the wrong OCR box.
+    """
+    payload = json.loads(_clean_json_payload(value))
+    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
+        raise ValueError("batch translator response must contain a segments array")
+    result: dict[str, dict[str, Any]] = {}
+    for raw in payload["segments"]:
+        if not isinstance(raw, dict):
+            raise ValueError("batch translator segment must be an object")
+        segment_id = str(raw.get("id", "")).strip()
+        if segment_id in result or segment_id not in expected:
+            raise ValueError(f"batch translator returned unexpected segment id: {segment_id}")
+        translation = clean_translation(raw.get("translation", ""))
+        if not translation:
+            raise ValueError(f"batch translator returned empty translation: {segment_id}")
+        raw_words = raw.get("words", [])
+        if not isinstance(raw_words, list):
+            raise ValueError(f"batch translator words must be an array: {segment_id}")
+        words: dict[str, dict[str, str]] = {}
+        for word in raw_words:
+            if not isinstance(word, dict):
+                raise ValueError(f"batch translator word must be an object: {segment_id}")
+            word_id = str(word.get("id", "")).strip()
+            if word_id in words or word_id not in expected[segment_id]:
+                raise ValueError(f"batch translator returned unexpected word id: {word_id}")
+            meaning = clean_translation(word.get("meaning", ""))
+            if not meaning:
+                raise ValueError(f"batch translator returned empty meaning: {word_id}")
+            if "phonetic" not in word or not isinstance(word.get("phonetic"), str):
+                raise ValueError(f"batch translator returned invalid phonetic: {word_id}")
+            words[word_id] = {
+                "meaning": meaning,
+                "phonetic": clean_phonetic(word.get("phonetic", "")),
+            }
+        result[segment_id] = {"translation": translation, "words": words}
+
+    missing: dict[str, set[str]] = {}
+    for segment_id, word_ids in expected.items():
+        if segment_id not in result:
+            missing[segment_id] = set(word_ids)
+            continue
+        absent = set(word_ids) - set(result[segment_id]["words"])
+        if absent:
+            missing[segment_id] = absent
+    return result, missing
+
+
+def missing_translation_items(
+    items: list[dict[str, Any]], missing: dict[str, set[str]]
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+    supplement: list[dict[str, Any]] = []
+    supplement_expected: dict[str, set[str]] = {}
+    for item in items:
+        segment_id = str(item["id"])
+        missing_ids = missing.get(segment_id)
+        if not missing_ids:
+            continue
+        words = [word for word in item["words"] if word["id"] in missing_ids]
+        supplement.append(
+            {
+                "id": segment_id,
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "words": words,
+            }
+        )
+        supplement_expected[segment_id] = {word["id"] for word in words}
+    return supplement, supplement_expected
+
+
+def merge_translation_supplement(
+    base: dict[str, dict[str, Any]],
+    supplement: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    for segment_id, extra in supplement.items():
+        if segment_id not in base:
+            base[segment_id] = {
+                "translation": extra["translation"],
+                "words": dict(extra["words"]),
+            }
+            continue
+        base[segment_id]["words"].update(extra["words"])
+    return base
+
 def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
     payload = json.loads(_clean_json_payload(value))
     if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
@@ -1223,17 +1315,62 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
     )
 
     print(json.dumps({"event": "progress", "stage": "translator", "progress": 0, "total": 2}), flush=True)
-    candidates = _batch_generate(
-        backend,
-        BATCH_TRANSLATOR_SYSTEM_PROMPT,
-        batch_translation_prompt(items),
-        kind="page_translation",
-        stage_label="整页翻译",
-        parser=lambda raw: parse_batch_translation(raw, expected),
-        schema=BATCH_TRANSLATION_SCHEMA,
-        page=page_number,
-        max_completion_tokens=translation_token_budget,
-    )
+    if isinstance(backend, LocalMLXBackend):
+        candidates, missing = _batch_generate(
+            backend,
+            BATCH_TRANSLATOR_SYSTEM_PROMPT,
+            batch_translation_prompt(items),
+            kind="page_translation",
+            stage_label="整页翻译",
+            parser=lambda raw: parse_batch_translation_partial(raw, expected),
+            schema=BATCH_TRANSLATION_SCHEMA,
+            page=page_number,
+            max_completion_tokens=translation_token_budget,
+        )
+        if missing:
+            supplement_items, supplement_expected = missing_translation_items(items, missing)
+            print(
+                json.dumps(
+                    {
+                        "event": "status",
+                        "message": f"本地翻译漏掉 {sum(len(ids) for ids in missing.values())} 个单词，正在只补齐缺失项",
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            supplement = _batch_generate(
+                backend,
+                BATCH_TRANSLATOR_SYSTEM_PROMPT,
+                batch_translation_prompt(supplement_items),
+                kind="page_translation",
+                stage_label="本地漏词补齐",
+                parser=lambda raw: parse_batch_translation(raw, supplement_expected),
+                schema=BATCH_TRANSLATION_SCHEMA,
+                page=page_number,
+                max_completion_tokens=min(
+                    translation_token_budget,
+                    max(1024, 256 + sum(len(ids) for ids in missing.values()) * 96),
+                ),
+            )
+            candidates = merge_translation_supplement(candidates, supplement)
+        # The supplement is strict; reaching this point means every supplied
+        # OCR word ID is present exactly once.
+        for segment_id, word_ids in expected.items():
+            if segment_id not in candidates or set(candidates[segment_id]["words"]) != word_ids:
+                raise ValueError(f"batch translator word IDs do not match segment {segment_id}")
+    else:
+        candidates = _batch_generate(
+            backend,
+            BATCH_TRANSLATOR_SYSTEM_PROMPT,
+            batch_translation_prompt(items),
+            kind="page_translation",
+            stage_label="整页翻译",
+            parser=lambda raw: parse_batch_translation(raw, expected),
+            schema=BATCH_TRANSLATION_SCHEMA,
+            page=page_number,
+            max_completion_tokens=translation_token_budget,
+        )
     print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
     review_items = []
     for item in items:
