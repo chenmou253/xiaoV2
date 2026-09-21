@@ -630,6 +630,25 @@ class TranslationTests(unittest.TestCase):
         self.assertIn("Hello world.", prompt)
         self.assertIn('"text":"Hello"', prompt)
 
+    def test_local_candidate_validation_helpers(self):
+        from translate_page import expected_for_items, validate_complete_candidates
+
+        items = [{
+            "id": "s0",
+            "target_text": "Hello",
+            "context": "",
+            "words": [{"id": "w0", "text": "Hello", "phonetic": ""}],
+        }]
+        expected = expected_for_items(items)
+        candidates = {
+            "s0": {
+                "translation": "你好",
+                "words": {"w0": {"meaning": "你好", "phonetic": "həˈloʊ"}},
+            }
+        }
+        validate_complete_candidates(candidates, expected)
+        self.assertEqual(expected, {"s0": {"w0"}})
+
     def test_local_translation_batches_are_fixed_at_three_segments(self):
         from translate_page import _local_item_batches
 
