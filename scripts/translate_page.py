@@ -900,145 +900,119 @@ def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
 
 
 class LocalStructureError(ValueError):
-    """Local-model output is syntactically valid enough to inspect but structurally unusable."""
+    """Local line protocol is structurally unusable."""
+
+
+def _protocol_clean_field(value: Any) -> str:
+    return " ".join(str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").split()).strip()
 
 
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
-    payload = {
-        "segment_count": len(items),
-        "items": [
-            {
-                "segment_index": segment_index,
-                "context": item["context"],
-                "target_text": item["target_text"],
-                "word_count": len(item["words"]),
-                "words": [
-                    {
-                        "word_index": word_index,
-                        "text": word["text"],
-                        "phonetic": word.get("phonetic", ""),
-                    }
-                    for word_index, word in enumerate(item["words"])
-                ],
-            }
-            for segment_index, item in enumerate(items)
-        ],
-    }
-    return (
-        "Translate the following textbook data. "
-        "Use only the temporary numeric indexes shown in the payload. "
-        "Never output or reconstruct any source/business IDs. "
-        "Return every segment_index and word_index exactly once.\n\n"
-        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    )
+    lines = [
+        f"SEGMENT_COUNT\t{len(items)}",
+    ]
+    for segment_index, item in enumerate(items):
+        lines.append(f"SEGMENT\t{segment_index}")
+        lines.append("CONTEXT\t" + _protocol_clean_field(item["context"]))
+        lines.append("TEXT\t" + _protocol_clean_field(item["target_text"]))
+        lines.append(f"WORD_COUNT\t{len(item['words'])}")
+        for word_index, word in enumerate(item["words"]):
+            lines.append(
+                f"WORD\t{word_index}\t{_protocol_clean_field(word['text'])}\t{_protocol_clean_field(word.get('phonetic', ''))}"
+            )
+        lines.append("END_SEGMENT")
+    return "\n".join(lines)
 
 
 def parse_local_translation(
     value: Any,
     items: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    payload = json.loads(_clean_json_payload(value))
-    if not isinstance(payload, dict) or set(payload) != {"segments"}:
-        raise LocalStructureError("local translator response must contain only a segments array")
-    raw_segments = payload["segments"]
-    if not isinstance(raw_segments, list):
-        raise LocalStructureError("local translator segments must be an array")
-    if len(raw_segments) != len(items):
-        raise LocalStructureError(
-            f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
-        )
-
-    by_segment_index: dict[int, dict[str, Any]] = {}
-    for raw_segment in raw_segments:
-        required = {"segment_index", "translation", "words"}
-        if not isinstance(raw_segment, dict) or set(raw_segment) != required:
-            raise LocalStructureError("local translator segment has an invalid shape")
-        segment_index = raw_segment.get("segment_index")
-        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
-            raise LocalStructureError("local translator segment_index must be an integer")
-        if segment_index < 0 or segment_index >= len(items):
-            raise LocalStructureError(
-                f"local translator segment_index out of range: {segment_index}"
-            )
-        if segment_index in by_segment_index:
-            raise LocalStructureError(
-                f"local translator duplicate segment_index: {segment_index}"
-            )
-        by_segment_index[segment_index] = raw_segment
-
-    expected_segment_indexes = set(range(len(items)))
-    if set(by_segment_index) != expected_segment_indexes:
-        raise LocalStructureError(
-            "local translator segment indexes do not exactly match the input"
-        )
-
-    result: dict[str, dict[str, Any]] = {}
-    for segment_index, item in enumerate(items):
-        raw_segment = by_segment_index[segment_index]
-        translation = clean_translation(raw_segment.get("translation", ""))
-        if not translation:
-            raise ValueError(
-                f"local translator returned empty translation at segment {segment_index}"
-            )
-        raw_words = raw_segment.get("words")
-        if not isinstance(raw_words, list):
-            raise LocalStructureError(
-                f"local translator words must be an array at segment {segment_index}"
-            )
-        expected_words = item["words"]
-        if len(raw_words) != len(expected_words):
-            raise LocalStructureError(
-                f"local translator word count mismatch at segment {segment_index}: "
-                f"got {len(raw_words)}, want {len(expected_words)}"
-            )
-
-        by_word_index: dict[int, dict[str, Any]] = {}
-        for raw_word in raw_words:
-            required_word = {"word_index", "meaning", "phonetic"}
-            if not isinstance(raw_word, dict) or set(raw_word) != required_word:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise LocalStructureError("local translator returned empty protocol")
+    sentence_results: dict[int, str] = {}
+    word_results: dict[tuple[int, int], dict[str, str]] = {}
+    for line_number, raw_line in enumerate(text.split("\n"), 1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        kind = parts[0].strip()
+        if kind == "S":
+            if len(parts) != 3:
+                raise LocalStructureError(f"local translator invalid S line at {line_number}")
+            try:
+                segment_index = int(parts[1])
+            except ValueError as exc:
+                raise LocalStructureError(f"local translator invalid segment index at line {line_number}") from exc
+            if segment_index < 0 or segment_index >= len(items):
+                raise LocalStructureError(f"local translator segment index out of range: {segment_index}")
+            if segment_index in sentence_results:
+                raise LocalStructureError(f"local translator duplicate sentence: {segment_index}")
+            translation = clean_translation(parts[2])
+            if not translation:
+                raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+            sentence_results[segment_index] = translation
+            continue
+        if kind == "W":
+            if len(parts) != 5:
+                raise LocalStructureError(f"local translator invalid W line at {line_number}")
+            try:
+                segment_index = int(parts[1])
+                word_index = int(parts[2])
+            except ValueError as exc:
+                raise LocalStructureError(f"local translator invalid word index at line {line_number}") from exc
+            if segment_index < 0 or segment_index >= len(items):
+                raise LocalStructureError(f"local translator segment index out of range: {segment_index}")
+            if word_index < 0 or word_index >= len(items[segment_index]["words"]):
                 raise LocalStructureError(
-                    f"local translator word at segment {segment_index} has an invalid shape"
+                    f"local translator word index out of range: {segment_index}:{word_index}"
                 )
-            word_index = raw_word.get("word_index")
-            if not isinstance(word_index, int) or isinstance(word_index, bool):
+            key = (segment_index, word_index)
+            if key in word_results:
                 raise LocalStructureError(
-                    f"local translator word_index must be an integer at segment {segment_index}"
+                    f"local translator duplicate word: {segment_index}:{word_index}"
                 )
-            if word_index < 0 or word_index >= len(expected_words):
-                raise LocalStructureError(
-                    f"local translator word_index out of range: {segment_index}:{word_index}"
-                )
-            if word_index in by_word_index:
-                raise LocalStructureError(
-                    f"local translator duplicate word_index: {segment_index}:{word_index}"
-                )
-            by_word_index[word_index] = raw_word
-
-        expected_word_indexes = set(range(len(expected_words)))
-        if set(by_word_index) != expected_word_indexes:
-            raise LocalStructureError(
-                f"local translator word indexes do not exactly match segment {segment_index}"
-            )
-
-        words: dict[str, dict[str, str]] = {}
-        for word_index, source_word in enumerate(expected_words):
-            raw_word = by_word_index[word_index]
-            meaning = clean_translation(raw_word.get("meaning", ""))
+            meaning = clean_translation(parts[3])
             if not meaning:
                 raise ValueError(
                     f"local translator returned empty meaning at {segment_index}:{word_index}"
                 )
-            phonetic_value = raw_word.get("phonetic")
-            if not isinstance(phonetic_value, str):
-                raise ValueError(
-                    f"local translator returned invalid phonetic at {segment_index}:{word_index}"
-                )
-            words[str(source_word["id"])] = {
+            word_results[key] = {
                 "meaning": meaning,
-                "phonetic": clean_phonetic(phonetic_value),
+                "phonetic": clean_phonetic(parts[4]),
             }
+            continue
+        raise LocalStructureError(f"local translator unexpected protocol line at {line_number}: {kind}")
+
+    expected_sentences = set(range(len(items)))
+    if set(sentence_results) != expected_sentences:
+        missing = sorted(expected_sentences - set(sentence_results))
+        extra = sorted(set(sentence_results) - expected_sentences)
+        raise LocalStructureError(
+            f"local translator sentence coverage mismatch: missing={missing} extra={extra}"
+        )
+
+    expected_words = {
+        (segment_index, word_index)
+        for segment_index, item in enumerate(items)
+        for word_index in range(len(item["words"]))
+    }
+    if set(word_results) != expected_words:
+        missing = sorted(expected_words - set(word_results))
+        extra = sorted(set(word_results) - expected_words)
+        raise LocalStructureError(
+            f"local translator word coverage mismatch: missing={missing} extra={extra}"
+        )
+
+    result: dict[str, dict[str, Any]] = {}
+    for segment_index, item in enumerate(items):
+        words: dict[str, dict[str, str]] = {}
+        for word_index, source_word in enumerate(item["words"]):
+            words[str(source_word["id"])] = word_results[(segment_index, word_index)]
         result[str(item["id"])] = {
-            "translation": translation,
+            "translation": sentence_results[segment_index],
             "words": words,
         }
     return result
@@ -1048,34 +1022,28 @@ def local_review_prompt(
     items: list[dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
 ) -> str:
-    payload = {
-        "segment_count": len(items),
-        "segments": [
-            {
-                "segment_index": segment_index,
-                "context": item["context"],
-                "target_text": item["target_text"],
-                "candidate_translation": candidates[item["id"]]["translation"],
-                "word_count": len(item["words"]),
-                "words": [
-                    {
-                        "word_index": word_index,
-                        "text": word["text"],
-                        "candidate_meaning": candidates[item["id"]]["words"][word["id"]]["meaning"],
-                        "candidate_phonetic": candidates[item["id"]]["words"][word["id"]]["phonetic"],
-                    }
-                    for word_index, word in enumerate(item["words"])
-                ],
-            }
-            for segment_index, item in enumerate(items)
-        ],
-    }
-    return (
-        "Review the following textbook translation candidates. "
-        "Refer to content only by the temporary zero-based segment_index and word_index. "
-        "Never output or reconstruct source/business IDs.\n\n"
-        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    )
+    lines = [f"SEGMENT_COUNT\t{len(items)}"]
+    for segment_index, item in enumerate(items):
+        candidate = candidates[item["id"]]
+        lines.append(f"SEGMENT\t{segment_index}")
+        lines.append("CONTEXT\t" + _protocol_clean_field(item["context"]))
+        lines.append("TEXT\t" + _protocol_clean_field(item["target_text"]))
+        lines.append("CANDIDATE_TRANSLATION\t" + _protocol_clean_field(candidate["translation"]))
+        lines.append(f"WORD_COUNT\t{len(item['words'])}")
+        for word_index, word in enumerate(item["words"]):
+            word_candidate = candidate["words"][word["id"]]
+            lines.append(
+                "WORD\t"
+                + str(word_index)
+                + "\t"
+                + _protocol_clean_field(word["text"])
+                + "\t"
+                + _protocol_clean_field(word_candidate["meaning"])
+                + "\t"
+                + _protocol_clean_field(word_candidate["phonetic"])
+            )
+        lines.append("END_SEGMENT")
+    return "\n".join(lines)
 
 
 def parse_local_review(
@@ -1083,85 +1051,93 @@ def parse_local_review(
     items: list[dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    payload = json.loads(_clean_json_payload(value))
-    if not isinstance(payload, dict) or set(payload) != {"issues"}:
-        raise LocalStructureError("local reviewer response must contain only an issues array")
-    issues = payload["issues"]
-    if not isinstance(issues, list):
-        raise LocalStructureError("local reviewer issues must be an array")
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise LocalStructureError("local reviewer returned empty protocol")
+    if text == "OK":
+        return fallback_review(candidates)
+    if any(line.strip() == "OK" for line in text.split("\n")):
+        raise LocalStructureError("local reviewer mixed OK with correction lines")
 
     result = fallback_review(candidates)
     seen: set[tuple[int, int, str]] = set()
-    for raw in issues:
-        required = {"segment_index", "word_index", "field", "reason", "suggestion"}
-        if not isinstance(raw, dict) or set(raw) != required:
-            raise LocalStructureError("local reviewer issue has an invalid shape")
-        segment_index = raw["segment_index"]
-        word_index = raw["word_index"]
-        field = str(raw["field"]).strip()
-        reason = str(raw["reason"]).strip()
-        suggestion = str(raw["suggestion"]).strip()
-        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
-            raise LocalStructureError("local reviewer segment_index must be an integer")
-        if not isinstance(word_index, int) or isinstance(word_index, bool):
-            raise LocalStructureError("local reviewer word_index must be an integer")
-        if segment_index < 0 or segment_index >= len(items):
-            raise LocalStructureError(f"local reviewer segment_index out of range: {segment_index}")
-        if field not in {"translation", "meaning", "phonetic"} or not reason:
-            raise ValueError("local reviewer issue has an invalid field or reason")
-
-        item = items[segment_index]
-        segment_id = str(item["id"])
-        if field == "translation":
-            if word_index != -1:
-                raise LocalStructureError("local sentence translation issue must use word_index=-1")
-            correction = clean_translation(suggestion)
-            if not correction:
-                raise ValueError("local sentence translation correction must not be empty")
-            result[segment_id]["translation"] = correction
+    for line_number, raw_line in enumerate(text.split("\n"), 1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        kind = parts[0].strip()
+        if kind == "S":
+            if len(parts) != 5:
+                raise LocalStructureError(f"local reviewer invalid S line at {line_number}")
+            try:
+                segment_index = int(parts[1])
+            except ValueError as exc:
+                raise LocalStructureError(f"local reviewer invalid segment index at line {line_number}") from exc
+            if segment_index < 0 or segment_index >= len(items):
+                raise LocalStructureError(f"local reviewer segment index out of range: {segment_index}")
+            field = parts[2].strip()
+            reason = _protocol_clean_field(parts[3])
+            suggestion = clean_translation(parts[4])
+            if field != "translation" or not reason or not suggestion:
+                raise ValueError("local reviewer invalid sentence correction")
+            key = (segment_index, -1, field)
+            if key in seen:
+                raise LocalStructureError("local reviewer duplicate sentence correction")
+            seen.add(key)
+            segment_id = str(items[segment_index]["id"])
+            result[segment_id]["translation"] = suggestion
             result[segment_id]["issues"].append(reason)
             result[segment_id]["passed"] = False
-        else:
-            if word_index < 0 or word_index >= len(item["words"]):
+            continue
+        if kind == "W":
+            if len(parts) != 6:
+                raise LocalStructureError(f"local reviewer invalid W line at {line_number}")
+            try:
+                segment_index = int(parts[1])
+                word_index = int(parts[2])
+            except ValueError as exc:
+                raise LocalStructureError(f"local reviewer invalid word index at line {line_number}") from exc
+            if segment_index < 0 or segment_index >= len(items):
+                raise LocalStructureError(f"local reviewer segment index out of range: {segment_index}")
+            if word_index < 0 or word_index >= len(items[segment_index]["words"]):
                 raise LocalStructureError(
-                    f"local reviewer word_index out of range: {segment_index}:{word_index}"
+                    f"local reviewer word index out of range: {segment_index}:{word_index}"
                 )
-            word_id = str(item["words"][word_index]["id"])
+            field = parts[3].strip()
+            reason = _protocol_clean_field(parts[4])
+            suggestion_raw = parts[5]
+            if field not in {"meaning", "phonetic"} or not reason:
+                raise ValueError("local reviewer invalid word correction")
+            key = (segment_index, word_index, field)
+            if key in seen:
+                raise LocalStructureError("local reviewer duplicate word correction")
+            seen.add(key)
+            segment_id = str(items[segment_index]["id"])
+            word_id = str(items[segment_index]["words"][word_index]["id"])
             word_result = result[segment_id]["words"][word_id]
             if field == "meaning":
-                correction = clean_translation(suggestion)
-                if not correction:
-                    raise ValueError(
-                        f"local word meaning correction must not be empty: {segment_index}:{word_index}"
-                    )
-                word_result["meaning"] = correction
+                suggestion = clean_translation(suggestion_raw)
+                if not suggestion:
+                    raise ValueError("local reviewer empty meaning correction")
+                word_result["meaning"] = suggestion
             else:
-                correction = clean_phonetic(suggestion)
-                if not correction:
-                    raise ValueError(
-                        f"local phonetic correction must not be empty: {segment_index}:{word_index}"
-                    )
-                word_result["phonetic"] = correction
+                suggestion = clean_phonetic(suggestion_raw)
+                if not suggestion:
+                    raise ValueError("local reviewer empty phonetic correction")
+                word_result["phonetic"] = suggestion
             word_result["issues"].append(reason)
             result[segment_id]["passed"] = False
-
-        issue_key = (segment_index, word_index, field)
-        if issue_key in seen:
-            raise LocalStructureError("local reviewer returned a duplicate issue")
-        seen.add(issue_key)
+            continue
+        raise LocalStructureError(f"local reviewer unexpected protocol line at {line_number}: {kind}")
     return result
 
 
 def _is_local_retryable_structure_error(exc: Exception) -> bool:
-    # Local inference may regenerate the same whole-page request once when the
-    # output itself is malformed/truncated. Semantic/count mismatches remain
-    # hard failures so we never guess how to realign textbook content.
-    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated, LocalStructureError)):
-        return True
-    return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
+    return isinstance(exc, (CompletionTruncated, LocalStructureError))
 
 
-def _local_structured_call(
+def _local_protocol_call(
     backend: LocalMLXBackend,
     system_prompt: str,
     prompt: str,
@@ -1169,10 +1145,9 @@ def _local_structured_call(
     kind: str,
     page: int | str | None,
     parser: Any,
-    schema: dict[str, Any],
     max_completion_tokens: int,
 ) -> Any:
-    """Run one local whole-page request and regenerate malformed JSON once."""
+    """Run one local whole-page line-protocol request and regenerate once."""
     last_error: Exception | None = None
     for attempt in (1, 2):
         raw: str | None = None
@@ -1181,18 +1156,18 @@ def _local_structured_call(
             retry_instruction = ""
             if attempt == 2:
                 retry_instruction = (
-                    "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
-                    "Regenerate the entire same request from scratch. Return ONLY one "
-                    "complete JSON object. Keep every array length and position exactly "
-                    "the same as the input. Do not output IDs."
+                    "\n\nPREVIOUS OUTPUT VIOLATED THE LINE PROTOCOL. "
+                    "Regenerate the entire same request from scratch. "
+                    "Return ONLY S/W protocol lines (or OK for reviewer). "
+                    "Do not output JSON, Markdown, or explanations. "
+                    "Return every supplied temporary index exactly once."
                 )
-            raw = _generate_once(
-                backend,
+            # IMPORTANT: local protocol bypasses generate_structured entirely.
+            # The model produces plain text; only the cloud path uses JSON Schema.
+            raw = backend.generate(
                 system_prompt + retry_instruction,
                 prompt,
                 max_completion_tokens,
-                schema_name=kind,
-                schema=schema,
             )
             return parser(raw)
         except Exception as exc:
@@ -1212,7 +1187,7 @@ def _local_structured_call(
                     json.dumps(
                         {
                             "event": "status",
-                            "message": "本地模型结构化输出无效，正在仅重生成本页一次",
+                            "message": "本地模型行协议输出无效，正在整页重生成一次",
                         },
                         ensure_ascii=False,
                     ),
@@ -1220,7 +1195,7 @@ def _local_structured_call(
                 )
                 continue
             raise
-    raise last_error or RuntimeError("local structured generation failed")
+    raise last_error or RuntimeError("local protocol generation failed")
 
 
 def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
@@ -1729,14 +1704,13 @@ def local_translate_candidates(
         ),
         flush=True,
     )
-    candidates = _local_structured_call(
+    candidates = _local_protocol_call(
         backend,
         LOCAL_TRANSLATOR_SYSTEM_PROMPT,
         local_translation_prompt(items),
         kind="page_translation",
         page=page,
         parser=lambda raw: parse_local_translation(raw, items),
-        schema=LOCAL_TRANSLATION_SCHEMA,
         max_completion_tokens=min(
             max_completion_tokens,
             max(2048, 768 + word_count * 112 + len(items) * 192),
@@ -1756,14 +1730,13 @@ def local_review_candidates(
     page: int | str | None,
 ) -> tuple[dict[str, dict[str, Any]], bool]:
     try:
-        reviewed = _local_structured_call(
+        reviewed = _local_protocol_call(
             backend,
             LOCAL_REVIEWER_SYSTEM_PROMPT,
             local_review_prompt(items, candidates),
             kind="page_review",
             page=page,
             parser=lambda raw: parse_local_review(raw, items, candidates),
-            schema=LOCAL_REVIEW_SCHEMA,
             max_completion_tokens=max(
                 1024,
                 256 + sum(len(item["words"]) for item in items) * 40 + len(items) * 64,
