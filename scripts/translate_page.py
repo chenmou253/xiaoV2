@@ -950,6 +950,10 @@ def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
     return matches[0]
 
 
+class LocalStructureError(ValueError):
+    """Local-model output is syntactically valid enough to inspect but structurally unusable."""
+
+
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     payload = {
         "items": [
@@ -981,10 +985,10 @@ def parse_local_translation(
 ) -> dict[str, dict[str, Any]]:
     payload = json.loads(_clean_json_payload(value))
     if not isinstance(payload, dict) or set(payload) != {"segments"}:
-        raise ValueError("local translator response must contain only a segments array")
+        raise LocalStructureError("local translator response must contain only a segments array")
     raw_segments = payload["segments"]
     if not isinstance(raw_segments, list):
-        raise ValueError("local translator segments must be an array")
+        raise LocalStructureError("local translator segments must be an array")
     if len(raw_segments) != len(items):
         raise ValueError(
             f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
@@ -993,13 +997,13 @@ def parse_local_translation(
     result: dict[str, dict[str, Any]] = {}
     for segment_index, (raw_segment, item) in enumerate(zip(raw_segments, items)):
         if not isinstance(raw_segment, dict) or set(raw_segment) != {"translation", "words"}:
-            raise ValueError(f"local translator segment {segment_index} has an invalid shape")
+            raise LocalStructureError(f"local translator segment {segment_index} has an invalid shape")
         translation = clean_translation(raw_segment.get("translation", ""))
         if not translation:
             raise ValueError(f"local translator returned empty translation at segment {segment_index}")
         raw_words = raw_segment.get("words")
         if not isinstance(raw_words, list):
-            raise ValueError(f"local translator words must be an array at segment {segment_index}")
+            raise LocalStructureError(f"local translator words must be an array at segment {segment_index}")
         expected_words = item["words"]
         if len(raw_words) != len(expected_words):
             raise ValueError(
@@ -1070,28 +1074,28 @@ def parse_local_review(
 ) -> dict[str, dict[str, Any]]:
     payload = json.loads(_clean_json_payload(value))
     if not isinstance(payload, dict) or set(payload) != {"issues"}:
-        raise ValueError("local reviewer response must contain only an issues array")
+        raise LocalStructureError("local reviewer response must contain only an issues array")
     issues = payload["issues"]
     if not isinstance(issues, list):
-        raise ValueError("local reviewer issues must be an array")
+        raise LocalStructureError("local reviewer issues must be an array")
 
     result = fallback_review(candidates)
     seen: set[tuple[int, int, str]] = set()
     for raw in issues:
         required = {"segment_index", "word_index", "field", "reason", "suggestion"}
         if not isinstance(raw, dict) or set(raw) != required:
-            raise ValueError("local reviewer issue has an invalid shape")
+            raise LocalStructureError("local reviewer issue has an invalid shape")
         segment_index = raw["segment_index"]
         word_index = raw["word_index"]
         field = str(raw["field"]).strip()
         reason = str(raw["reason"]).strip()
         suggestion = str(raw["suggestion"]).strip()
         if not isinstance(segment_index, int) or isinstance(segment_index, bool):
-            raise ValueError("local reviewer segment_index must be an integer")
+            raise LocalStructureError("local reviewer segment_index must be an integer")
         if not isinstance(word_index, int) or isinstance(word_index, bool):
-            raise ValueError("local reviewer word_index must be an integer")
+            raise LocalStructureError("local reviewer word_index must be an integer")
         if segment_index < 0 or segment_index >= len(items):
-            raise ValueError(f"local reviewer segment_index out of range: {segment_index}")
+            raise LocalStructureError(f"local reviewer segment_index out of range: {segment_index}")
         if field not in {"translation", "meaning", "phonetic"} or not reason:
             raise ValueError("local reviewer issue has an invalid field or reason")
 
@@ -1099,7 +1103,7 @@ def parse_local_review(
         segment_id = str(item["id"])
         if field == "translation":
             if word_index != -1:
-                raise ValueError("local sentence translation issue must use word_index=-1")
+                raise LocalStructureError("local sentence translation issue must use word_index=-1")
             correction = clean_translation(suggestion)
             if not correction:
                 raise ValueError("local sentence translation correction must not be empty")
@@ -1132,7 +1136,7 @@ def parse_local_review(
 
         issue_key = (segment_index, word_index, field)
         if issue_key in seen:
-            raise ValueError("local reviewer returned a duplicate issue")
+            raise LocalStructureError("local reviewer returned a duplicate issue")
         seen.add(issue_key)
     return result
 
@@ -1141,7 +1145,7 @@ def _is_local_retryable_structure_error(exc: Exception) -> bool:
     # Local inference may regenerate the same whole-page request once when the
     # output itself is malformed/truncated. Semantic/count mismatches remain
     # hard failures so we never guess how to realign textbook content.
-    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated)):
+    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated, LocalStructureError)):
         return True
     return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
 
@@ -1207,99 +1211,6 @@ def _local_structured_call(
             raise
     raise last_error or RuntimeError("local structured generation failed")
 
-
-def parse_batch_translation_partial(
-    value: Any, expected: dict[str, set[str]]
-) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
-    """Parse a local-model page response without accepting any wrong IDs.
-
-    Missing segments/words are reported for one targeted local completion.
-    Unexpected/duplicate IDs, invalid meanings, or invalid phonetics remain hard
-    failures so we never silently associate a translation with the wrong OCR box.
-    """
-    payload = json.loads(_clean_json_payload(value))
-    if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
-        raise ValueError("batch translator response must contain a segments array")
-    result: dict[str, dict[str, Any]] = {}
-    for raw in payload["segments"]:
-        if not isinstance(raw, dict):
-            raise ValueError("batch translator segment must be an object")
-        raw_segment_id = str(raw.get("id", "")).strip()
-        segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
-        if segment_id in result:
-            raise ValueError(f"batch translator returned duplicate segment id: {raw_segment_id}")
-        translation = clean_translation(raw.get("translation", ""))
-        if not translation:
-            raise ValueError(f"batch translator returned empty translation: {segment_id}")
-        raw_words = raw.get("words", [])
-        if not isinstance(raw_words, list):
-            raise ValueError(f"batch translator words must be an array: {segment_id}")
-        words: dict[str, dict[str, str]] = {}
-        for word in raw_words:
-            if not isinstance(word, dict):
-                raise ValueError(f"batch translator word must be an object: {segment_id}")
-            raw_word_id = str(word.get("id", "")).strip()
-            word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
-            if word_id in words:
-                raise ValueError(f"batch translator returned duplicate word id: {raw_word_id}")
-            meaning = clean_translation(word.get("meaning", ""))
-            if not meaning:
-                raise ValueError(f"batch translator returned empty meaning: {word_id}")
-            if "phonetic" not in word or not isinstance(word.get("phonetic"), str):
-                raise ValueError(f"batch translator returned invalid phonetic: {word_id}")
-            words[word_id] = {
-                "meaning": meaning,
-                "phonetic": clean_phonetic(word.get("phonetic", "")),
-            }
-        result[segment_id] = {"translation": translation, "words": words}
-
-    missing: dict[str, set[str]] = {}
-    for segment_id, word_ids in expected.items():
-        if segment_id not in result:
-            missing[segment_id] = set(word_ids)
-            continue
-        absent = set(word_ids) - set(result[segment_id]["words"])
-        if absent:
-            missing[segment_id] = absent
-    return result, missing
-
-
-def missing_translation_items(
-    items: list[dict[str, Any]], missing: dict[str, set[str]]
-) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
-    supplement: list[dict[str, Any]] = []
-    supplement_expected: dict[str, set[str]] = {}
-    for item in items:
-        segment_id = str(item["id"])
-        if segment_id not in missing:
-            continue
-        missing_ids = missing[segment_id]
-        words = [word for word in item["words"] if word["id"] in missing_ids]
-        supplement.append(
-            {
-                "id": segment_id,
-                "context": item["context"],
-                "target_text": item["target_text"],
-                "words": words,
-            }
-        )
-        supplement_expected[segment_id] = {word["id"] for word in words}
-    return supplement, supplement_expected
-
-
-def merge_translation_supplement(
-    base: dict[str, dict[str, Any]],
-    supplement: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    for segment_id, extra in supplement.items():
-        if segment_id not in base:
-            base[segment_id] = {
-                "translation": extra["translation"],
-                "words": dict(extra["words"]),
-            }
-            continue
-        base[segment_id]["words"].update(extra["words"])
-    return base
 
 def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
     payload = json.loads(_clean_json_payload(value))
