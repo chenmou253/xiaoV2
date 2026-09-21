@@ -37,7 +37,8 @@ func notFound(message string) *AppError { return &AppError{404, 40400, message} 
 type PlatformService struct {
 	repo           *repository.PlatformRepository
 	cfg            config.Config
-	ttsModelSwitch func(oldModel, newModel string) error
+	ttsModelSwitch         func(oldModel, newModel string) error
+	translationModelSwitch func(oldModel, newModel string) error
 }
 
 func NewPlatformService(repo *repository.PlatformRepository, cfg config.Config) *PlatformService {
@@ -46,6 +47,9 @@ func NewPlatformService(repo *repository.PlatformRepository, cfg config.Config) 
 
 func (s *PlatformService) SetTTSModelSwitchHook(hook func(oldModel, newModel string) error) {
 	s.ttsModelSwitch = hook
+}
+func (s *PlatformService) SetTranslationModelSwitchHook(hook func(oldModel, newModel string) error) {
+	s.translationModelSwitch = hook
 }
 func normalizeEmail(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -329,6 +333,11 @@ func (s *PlatformService) SaveModelSettings(ctx context.Context, value ai.Settin
 	}
 	if !ai.ValidVoice(value.TTSModel, value.TTSVoice) {
 		return bad("TTS 音色不属于所选模型")
+	}
+	if current.TranslationModel != value.TranslationModel && s.translationModelSwitch != nil {
+		if err := s.translationModelSwitch(current.TranslationModel, value.TranslationModel); err != nil {
+			return err
+		}
 	}
 	if current.TTSModel != value.TTSModel && s.ttsModelSwitch != nil {
 		if err := s.ttsModelSwitch(current.TTSModel, value.TTSModel); err != nil {
