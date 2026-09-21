@@ -334,13 +334,15 @@ func (r *PlatformRepository) SetSiteSettingStatus(ctx context.Context, id uint64
 func (r *PlatformRepository) ModelSettings(ctx context.Context) (ai.Settings, error) {
 	settings := ai.DefaultSettings()
 	var rows []model.SiteSetting
-	if e := r.db.WithContext(ctx).Where("dict_code IN ? AND status=1", []string{"ai.ocr_model", "ai.tts_model", "ai.tts_voice"}).Order("id").Find(&rows).Error; e != nil {
+	if e := r.db.WithContext(ctx).Where("dict_code IN ? AND status=1", []string{"ai.ocr_model", "ai.translation_model", "ai.tts_model", "ai.tts_voice"}).Order("id").Find(&rows).Error; e != nil {
 		return settings, e
 	}
 	for _, row := range rows {
 		switch row.DictCode {
 		case "ai.ocr_model":
 			settings.OCRModel = row.ItemValue
+		case "ai.translation_model":
+			settings.TranslationModel = row.ItemValue
 		case "ai.tts_model":
 			settings.TTSModel = row.ItemValue
 		case "ai.tts_voice":
@@ -353,6 +355,7 @@ func (r *PlatformRepository) ModelSettings(ctx context.Context) (ai.Settings, er
 func (r *PlatformRepository) SaveModelSettings(ctx context.Context, settings ai.Settings, actor uint64) error {
 	values := map[string]string{
 		"ai.ocr_model": settings.OCRModel,
+		"ai.translation_model": settings.TranslationModel,
 		"ai.tts_model": settings.TTSModel,
 		"ai.tts_voice": settings.TTSVoice,
 	}
