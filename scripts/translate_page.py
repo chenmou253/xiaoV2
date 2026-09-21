@@ -848,6 +848,130 @@ def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
     return matches[0]
 
 
+def local_translation_batches(
+    items: list[dict[str, Any]],
+    *,
+    max_segments: int = LOCAL_BATCH_MAX_SEGMENTS,
+    max_words: int = LOCAL_BATCH_MAX_WORDS,
+) -> list[list[dict[str, Any]]]:
+    """Split local work without splitting a segment across batches."""
+    if max_segments < 1 or max_words < 1:
+        raise ValueError("local batch limits must be positive")
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_words = 0
+    for item in items:
+        word_count = len(item.get("words", []))
+        # One unusually dense segment remains atomic; the word limit is a
+        # target for grouping, never a reason to detach words from context.
+        if current and (
+            len(current) >= max_segments
+            or current_words + word_count > max_words
+        ):
+            batches.append(current)
+            current = []
+            current_words = 0
+        current.append(item)
+        current_words += word_count
+        if len(current) >= max_segments or current_words >= max_words:
+            batches.append(current)
+            current = []
+            current_words = 0
+    if current:
+        batches.append(current)
+    return batches
+
+
+def expected_for_items(items: list[dict[str, Any]]) -> dict[str, set[str]]:
+    return {
+        str(item["id"]): {str(word["id"]) for word in item.get("words", [])}
+        for item in items
+    }
+
+
+def _is_local_retryable_structure_error(exc: Exception) -> bool:
+    # Local inference is free and may retry only model-output structure errors.
+    # Network/provider/auth/runtime errors are never retried here.
+    return isinstance(exc, (json.JSONDecodeError, CompletionTruncated))
+
+
+def _local_structured_call(
+    backend: LocalMLXBackend,
+    system_prompt: str,
+    prompt: str,
+    *,
+    kind: str,
+    page: int | str | None,
+    parser: Any,
+    schema: dict[str, Any],
+    max_completion_tokens: int,
+    batch_index: int,
+    batch_total: int,
+) -> Any:
+    """Run one local batch, retrying malformed/truncated JSON at most once."""
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        raw: str | None = None
+        try:
+            _set_request_context(backend, kind, page, attempt)
+            retry_instruction = ""
+            if attempt == 2:
+                retry_instruction = (
+                    "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
+                    "Regenerate this same batch from scratch. Return ONLY one complete "
+                    "JSON object matching the schema. Keep every supplied ID exactly once."
+                )
+            raw = _generate_once(
+                backend,
+                system_prompt + retry_instruction,
+                prompt,
+                max_completion_tokens,
+                schema_name=kind,
+                schema=schema,
+            )
+            return parser(raw)
+        except Exception as exc:
+            last_error = exc
+            log_failure(
+                kind=kind,
+                target="local_batch",
+                context="",
+                error=exc,
+                attempt=attempt,
+                page=page,
+                model=getattr(backend, "model", ""),
+                raw=raw,
+                batch_index=batch_index,
+                batch_total=batch_total,
+            )
+            if attempt == 1 and _is_local_retryable_structure_error(exc):
+                print(
+                    json.dumps(
+                        {
+                            "event": "status",
+                            "message": f"本地模型第 {batch_index}/{batch_total} 批结构化输出无效，正在仅重生成该批次",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                continue
+            raise
+    raise last_error or RuntimeError("local structured generation failed")
+
+
+def validate_complete_candidates(
+    candidates: dict[str, dict[str, Any]],
+    expected: dict[str, set[str]],
+) -> None:
+    if set(candidates) != set(expected):
+        raise ValueError("batch translator segment IDs do not match the input page")
+    for segment_id, word_ids in expected.items():
+        words = candidates[segment_id].get("words", {})
+        if set(words) != word_ids:
+            raise ValueError(f"batch translator word IDs do not match segment {segment_id}")
+
+
 def parse_batch_translation_partial(
     value: Any, expected: dict[str, set[str]]
 ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
