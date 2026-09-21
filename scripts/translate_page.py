@@ -1702,6 +1702,65 @@ def build_review_items(
     return review_items
 
 
+def expected_for_items(items: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Build the exact segment/word ID shape expected from validated local batches."""
+    return {
+        str(item["id"]): {str(word["id"]) for word in item["words"]}
+        for item in items
+    }
+
+
+def validate_complete_candidates(
+    candidates: dict[str, dict[str, Any]],
+    expected: dict[str, set[str]],
+) -> None:
+    """Verify that a local batch/merged page contains every expected item exactly once."""
+    if set(candidates) != set(expected):
+        missing = sorted(set(expected) - set(candidates))
+        extra = sorted(set(candidates) - set(expected))
+        raise LocalStructureError(
+            f"local translator segment IDs do not match input: missing={missing} extra={extra}"
+        )
+
+    for segment_id, expected_words in expected.items():
+        candidate = candidates.get(segment_id)
+        if not isinstance(candidate, dict):
+            raise LocalStructureError(
+                f"local translator candidate is invalid for segment {segment_id}"
+            )
+        translation = clean_translation(candidate.get("translation", ""))
+        if not translation:
+            raise ValueError(
+                f"local translator returned empty translation: {segment_id}"
+            )
+        words = candidate.get("words")
+        if not isinstance(words, dict):
+            raise LocalStructureError(
+                f"local translator words are invalid for segment {segment_id}"
+            )
+        if set(words) != expected_words:
+            missing = sorted(expected_words - set(words))
+            extra = sorted(set(words) - expected_words)
+            raise LocalStructureError(
+                f"local translator word IDs do not match segment {segment_id}: "
+                f"missing={missing} extra={extra}"
+            )
+        for word_id in expected_words:
+            word = words[word_id]
+            if not isinstance(word, dict):
+                raise LocalStructureError(
+                    f"local translator word candidate is invalid: {word_id}"
+                )
+            if not clean_translation(word.get("meaning", "")):
+                raise ValueError(
+                    f"local translator returned empty meaning: {word_id}"
+                )
+            if not isinstance(word.get("phonetic"), str):
+                raise LocalStructureError(
+                    f"local translator returned invalid phonetic: {word_id}"
+                )
+
+
 def fallback_review(
     candidates: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
