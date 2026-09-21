@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // clearDraftPageArtifacts removes generated data that belongs exclusively to
