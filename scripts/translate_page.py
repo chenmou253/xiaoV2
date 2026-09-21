@@ -431,11 +431,27 @@ class LocalMLXBackend:
         if self.max_tokens < 512:
             raise RuntimeError("LOCAL_TRANSLATION_MAX_TOKENS must be at least 512")
         started = time.monotonic()
-        self._model, self._tokenizer = load(self.model_repo)
+        load_target = self.model_repo
+        # After the first successful download, prefer the already cached
+        # Hugging Face snapshot. This makes translation -> TTS -> translation
+        # switching independent of Hub availability and avoids a transient 503
+        # just because the resident MLX model had to be loaded again.
+        if not Path(load_target).expanduser().exists():
+            try:
+                from huggingface_hub import snapshot_download
+                load_target = snapshot_download(
+                    repo_id=self.model_repo,
+                    local_files_only=True,
+                )
+            except Exception:
+                # First install/download still needs the normal mlx-lm Hub
+                # resolution. Do not hide that error if the actual load fails.
+                load_target = self.model_repo
+        self._model, self._tokenizer = load(load_target)
         self._generate_fn = generate
         print(
             "[TRANSLATION LOCAL HEALTH] "
-            f"model={self.model_repo} load_seconds={time.monotonic() - started:.3f}",
+            f"model={self.model_repo} load_target={load_target} load_seconds={time.monotonic() - started:.3f}",
             file=sys.stderr,
             flush=True,
         )
