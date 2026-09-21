@@ -950,50 +950,197 @@ def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
     return matches[0]
 
 
-def local_translation_batches(
-    items: list[dict[str, Any]],
-    *,
-    max_segments: int = LOCAL_BATCH_MAX_SEGMENTS,
-    max_words: int = LOCAL_BATCH_MAX_WORDS,
-) -> list[list[dict[str, Any]]]:
-    """Split local work without splitting a segment across batches."""
-    if max_segments < 1 or max_words < 1:
-        raise ValueError("local batch limits must be positive")
-    batches: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    current_words = 0
-    for item in items:
-        word_count = len(item.get("words", []))
-        # One unusually dense segment remains atomic; the word limit is a
-        # target for grouping, never a reason to detach words from context.
-        if current and (
-            len(current) >= max_segments
-            or current_words + word_count > max_words
-        ):
-            batches.append(current)
-            current = []
-            current_words = 0
-        current.append(item)
-        current_words += word_count
-        if len(current) >= max_segments or current_words >= max_words:
-            batches.append(current)
-            current = []
-            current_words = 0
-    if current:
-        batches.append(current)
-    return batches
-
-
-def expected_for_items(items: list[dict[str, Any]]) -> dict[str, set[str]]:
-    return {
-        str(item["id"]): {str(word["id"]) for word in item.get("words", [])}
-        for item in items
+def local_translation_prompt(items: list[dict[str, Any]]) -> str:
+    payload = {
+        "items": [
+            {
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "phonetic": word.get("phonetic", ""),
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ]
     }
+    return (
+        "Translate the following ordered textbook data. "
+        "Do not output or reconstruct any source IDs. "
+        "Keep the number and order of segments and words exactly unchanged.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def parse_local_translation(
+    value: Any,
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    payload = json.loads(_clean_json_payload(value))
+    if not isinstance(payload, dict) or set(payload) != {"segments"}:
+        raise ValueError("local translator response must contain only a segments array")
+    raw_segments = payload["segments"]
+    if not isinstance(raw_segments, list):
+        raise ValueError("local translator segments must be an array")
+    if len(raw_segments) != len(items):
+        raise ValueError(
+            f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
+        )
+
+    result: dict[str, dict[str, Any]] = {}
+    for segment_index, (raw_segment, item) in enumerate(zip(raw_segments, items)):
+        if not isinstance(raw_segment, dict) or set(raw_segment) != {"translation", "words"}:
+            raise ValueError(f"local translator segment {segment_index} has an invalid shape")
+        translation = clean_translation(raw_segment.get("translation", ""))
+        if not translation:
+            raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+        raw_words = raw_segment.get("words")
+        if not isinstance(raw_words, list):
+            raise ValueError(f"local translator words must be an array at segment {segment_index}")
+        expected_words = item["words"]
+        if len(raw_words) != len(expected_words):
+            raise ValueError(
+                f"local translator word count mismatch at segment {segment_index}: "
+                f"got {len(raw_words)}, want {len(expected_words)}"
+            )
+        words: dict[str, dict[str, str]] = {}
+        for word_index, (raw_word, source_word) in enumerate(zip(raw_words, expected_words)):
+            if not isinstance(raw_word, dict) or set(raw_word) != {"meaning", "phonetic"}:
+                raise ValueError(
+                    f"local translator word {segment_index}:{word_index} has an invalid shape"
+                )
+            meaning = clean_translation(raw_word.get("meaning", ""))
+            if not meaning:
+                raise ValueError(
+                    f"local translator returned empty meaning at {segment_index}:{word_index}"
+                )
+            phonetic_value = raw_word.get("phonetic")
+            if not isinstance(phonetic_value, str):
+                raise ValueError(
+                    f"local translator returned invalid phonetic at {segment_index}:{word_index}"
+                )
+            words[str(source_word["id"])] = {
+                "meaning": meaning,
+                "phonetic": clean_phonetic(phonetic_value),
+            }
+        result[str(item["id"])] = {
+            "translation": translation,
+            "words": words,
+        }
+    return result
+
+
+def local_review_prompt(
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> str:
+    payload = {
+        "segments": [
+            {
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "candidate_translation": candidates[item["id"]]["translation"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "candidate_meaning": candidates[item["id"]]["words"][word["id"]]["meaning"],
+                        "candidate_phonetic": candidates[item["id"]]["words"][word["id"]]["phonetic"],
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ]
+    }
+    return (
+        "Review the following ordered textbook translation candidates. "
+        "Refer to items only by zero-based segment_index and word_index. "
+        "Do not output or reconstruct source IDs.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def parse_local_review(
+    value: Any,
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    payload = json.loads(_clean_json_payload(value))
+    if not isinstance(payload, dict) or set(payload) != {"issues"}:
+        raise ValueError("local reviewer response must contain only an issues array")
+    issues = payload["issues"]
+    if not isinstance(issues, list):
+        raise ValueError("local reviewer issues must be an array")
+
+    result = fallback_review(candidates)
+    seen: set[tuple[int, int, str]] = set()
+    for raw in issues:
+        required = {"segment_index", "word_index", "field", "reason", "suggestion"}
+        if not isinstance(raw, dict) or set(raw) != required:
+            raise ValueError("local reviewer issue has an invalid shape")
+        segment_index = raw["segment_index"]
+        word_index = raw["word_index"]
+        field = str(raw["field"]).strip()
+        reason = str(raw["reason"]).strip()
+        suggestion = str(raw["suggestion"]).strip()
+        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
+            raise ValueError("local reviewer segment_index must be an integer")
+        if not isinstance(word_index, int) or isinstance(word_index, bool):
+            raise ValueError("local reviewer word_index must be an integer")
+        if segment_index < 0 or segment_index >= len(items):
+            raise ValueError(f"local reviewer segment_index out of range: {segment_index}")
+        if field not in {"translation", "meaning", "phonetic"} or not reason:
+            raise ValueError("local reviewer issue has an invalid field or reason")
+
+        item = items[segment_index]
+        segment_id = str(item["id"])
+        if field == "translation":
+            if word_index != -1:
+                raise ValueError("local sentence translation issue must use word_index=-1")
+            correction = clean_translation(suggestion)
+            if not correction:
+                raise ValueError("local sentence translation correction must not be empty")
+            result[segment_id]["translation"] = correction
+            result[segment_id]["issues"].append(reason)
+            result[segment_id]["passed"] = False
+        else:
+            if word_index < 0 or word_index >= len(item["words"]):
+                raise ValueError(
+                    f"local reviewer word_index out of range: {segment_index}:{word_index}"
+                )
+            word_id = str(item["words"][word_index]["id"])
+            word_result = result[segment_id]["words"][word_id]
+            if field == "meaning":
+                correction = clean_translation(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local word meaning correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["meaning"] = correction
+            else:
+                correction = clean_phonetic(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local phonetic correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["phonetic"] = correction
+            word_result["issues"].append(reason)
+            result[segment_id]["passed"] = False
+
+        issue_key = (segment_index, word_index, field)
+        if issue_key in seen:
+            raise ValueError("local reviewer returned a duplicate issue")
+        seen.add(issue_key)
+    return result
 
 
 def _is_local_retryable_structure_error(exc: Exception) -> bool:
-    # Local inference is free and may retry only malformed/truncated output.
-    # Network/provider/auth/runtime and semantic validation errors are not retried.
+    # Local inference may regenerate the same whole-page request once when the
+    # output itself is malformed/truncated. Semantic/count mismatches remain
+    # hard failures so we never guess how to realign textbook content.
     if isinstance(exc, (json.JSONDecodeError, CompletionTruncated)):
         return True
     return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
@@ -1009,10 +1156,8 @@ def _local_structured_call(
     parser: Any,
     schema: dict[str, Any],
     max_completion_tokens: int,
-    batch_index: int,
-    batch_total: int,
 ) -> Any:
-    """Run one local batch, retrying malformed/truncated JSON at most once."""
+    """Run one local whole-page request and regenerate malformed JSON once."""
     last_error: Exception | None = None
     for attempt in (1, 2):
         raw: str | None = None
@@ -1022,9 +1167,9 @@ def _local_structured_call(
             if attempt == 2:
                 retry_instruction = (
                     "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
-                    "Regenerate the same request from scratch. Return ONLY one complete "
-                    "JSON object matching the schema. Preserve every supplied array length "
-                    "and position exactly; do not add or omit any item."
+                    "Regenerate the entire same request from scratch. Return ONLY one "
+                    "complete JSON object. Keep every array length and position exactly "
+                    "the same as the input. Do not output IDs."
                 )
             raw = _generate_once(
                 backend,
@@ -1039,22 +1184,20 @@ def _local_structured_call(
             last_error = exc
             log_failure(
                 kind=kind,
-                target="local_batch",
+                target="local_page",
                 context="",
                 error=exc,
                 attempt=attempt,
                 page=page,
                 model=getattr(backend, "model", ""),
                 raw=raw,
-                batch_index=batch_index,
-                batch_total=batch_total,
             )
             if attempt == 1 and _is_local_retryable_structure_error(exc):
                 print(
                     json.dumps(
                         {
                             "event": "status",
-                            "message": f"本地模型第 {batch_index}/{batch_total} 批结构化输出无效，正在仅重生成该批次",
+                            "message": "本地模型结构化输出无效，正在仅重生成本页一次",
                         },
                         ensure_ascii=False,
                     ),
@@ -1063,18 +1206,6 @@ def _local_structured_call(
                 continue
             raise
     raise last_error or RuntimeError("local structured generation failed")
-
-
-def validate_complete_candidates(
-    candidates: dict[str, dict[str, Any]],
-    expected: dict[str, set[str]],
-) -> None:
-    if set(candidates) != set(expected):
-        raise ValueError("batch translator segment IDs do not match the input page")
-    for segment_id, word_ids in expected.items():
-        words = candidates[segment_id].get("words", {})
-        if set(words) != word_ids:
-            raise ValueError(f"batch translator word IDs do not match segment {segment_id}")
 
 
 def parse_batch_translation_partial(
