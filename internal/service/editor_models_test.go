@@ -18,3 +18,18 @@ func TestPageAudioSettingsKeepsLockedPageSnapshot(t *testing.T) {
 		t.Fatalf("unlocked page must use draft default, got %#v", got)
 	}
 }
+
+
+func TestPageModelSettingsKeepsTranslationSnapshot(t *testing.T) {
+	draft := model.TextbookDraft{
+		OCRModel: ai.LocalOCRModel,
+		TranslationModel: ai.LocalTranslationModel,
+		TTSModel: ai.LocalTTSModel,
+		TTSVoice: "aiden",
+	}
+	page := model.TextbookDraftPage{TranslationModel: ai.CloudTranslationModel}
+	got := pageModelSettings(draft, page)
+	if got.TranslationModel != ai.CloudTranslationModel {
+		t.Fatalf("page translation snapshot = %q", got.TranslationModel)
+	}
+}
