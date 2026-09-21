@@ -612,7 +612,7 @@ class TranslationTests(unittest.TestCase):
 
 
 
-    def test_local_prompt_uses_line_protocol_without_business_ids(self):
+    def test_local_prompt_uses_order_only_protocol_without_business_ids(self):
         from translate_page import local_translation_prompt
 
         items = [{
@@ -628,12 +628,14 @@ class TranslationTests(unittest.TestCase):
         self.assertNotIn("p54-s0", prompt)
         self.assertNotIn("p54-s0-w0", prompt)
         self.assertIn("SEGMENT_COUNT\t1", prompt)
-        self.assertIn("SEGMENT\t0", prompt)
+        self.assertIn("\nSEGMENT\n", prompt)
         self.assertIn("WORD_COUNT\t2", prompt)
-        self.assertIn("WORD\t0\tHello", prompt)
-        self.assertIn("WORD\t1\tworld", prompt)
+        self.assertIn("WORD\tHello", prompt)
+        self.assertIn("WORD\tworld", prompt)
+        self.assertNotIn("SEGMENT\t0", prompt)
+        self.assertNotIn("WORD\t0\tHello", prompt)
 
-    def test_local_translation_line_protocol_maps_back_to_real_ids(self):
+    def test_local_translation_order_protocol_maps_back_to_real_ids(self):
         from translate_page import parse_local_translation
 
         items = [{
@@ -645,7 +647,7 @@ class TranslationTests(unittest.TestCase):
                 {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
             ],
         }]
-        raw = "S\t0\t你好，世界。\nW\t0\t0\t你好\thəˈloʊ\nW\t0\t1\t世界\twɝːld"
+        raw = "S\t你好，世界。\nW\t你好\thəˈloʊ\nW\t世界\twɝːld"
         parsed = parse_local_translation(raw, items)
         self.assertEqual(parsed["p54-s0"]["translation"], "你好，世界。")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
@@ -664,9 +666,9 @@ class TranslationTests(unittest.TestCase):
             ],
         }]
         raw = (
-            "S<TAB>0<TAB>我们来拼写一下。\n"
-            "W<TAB>0<TAB>0<TAB>让我们<TAB>lɛts\n"
-            "W<TAB>0<TAB>1<TAB>拼写<TAB>spɛl"
+            "S<TAB>我们来拼写一下。\n"
+            "W<TAB>让我们<TAB>lɛts\n"
+            "W<TAB>拼写<TAB>spɛl"
         )
         parsed = parse_local_translation(raw, items)
         self.assertEqual(parsed["p54-s0"]["translation"], "我们来拼写一下。")
@@ -681,7 +683,7 @@ class TranslationTests(unittest.TestCase):
             "target_text": "Hello.",
             "words": [{"id": "p54-s0-w0", "text": "Hello", "phonetic": ""}],
         }]
-        raw = "S\\t0\\t你好。\nW\\t0\\t0\\t你好\\thəˈloʊ"
+        raw = "S\\t你好。\nW\\t你好\\thəˈloʊ"
         parsed = parse_local_translation(raw, items)
         self.assertEqual(parsed["p54-s0"]["translation"], "你好。")
 
@@ -697,36 +699,22 @@ class TranslationTests(unittest.TestCase):
                 {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
             ],
         }]
-        raw = "S\t0\t你好，世界。\nW\t0\t0\t你好\thəˈloʊ"
-        with self.assertRaisesRegex(LocalStructureError, "word coverage mismatch"):
+        raw = "S\t你好，世界。\nW\t你好\thəˈloʊ"
+        with self.assertRaisesRegex(LocalStructureError, "row count mismatch"):
             parse_local_translation(raw, items)
 
-    def test_local_translation_accepts_protocol_lines_in_any_order(self):
-        from translate_page import parse_local_translation
+    def test_local_translation_rejects_reordered_row_types(self):
+        from translate_page import LocalStructureError, parse_local_translation
 
-        items = [
-            {
-                "id": "p54-s0",
-                "context": "First.",
-                "target_text": "First.",
-                "words": [{"id": "p54-s0-w0", "text": "First", "phonetic": ""}],
-            },
-            {
-                "id": "p54-s1",
-                "context": "Second.",
-                "target_text": "Second.",
-                "words": [{"id": "p54-s1-w0", "text": "Second", "phonetic": ""}],
-            },
-        ]
-        raw = (
-            "W\t1\t0\t第二\tˈsɛkənd\n"
-            "S\t0\t第一。\n"
-            "W\t0\t0\t第一\tfɝːst\n"
-            "S\t1\t第二。"
-        )
-        parsed = parse_local_translation(raw, items)
-        self.assertEqual(parsed["p54-s0"]["translation"], "第一。")
-        self.assertEqual(parsed["p54-s1"]["translation"], "第二。")
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello.",
+            "target_text": "Hello.",
+            "words": [{"id": "p54-s0-w0", "text": "Hello", "phonetic": ""}],
+        }]
+        raw = "W\t你好\thəˈloʊ\nS\t你好。"
+        with self.assertRaisesRegex(LocalStructureError, "row type mismatch"):
+            parse_local_translation(raw, items)
 
     def test_local_review_line_protocol_uses_indexes(self):
         from translate_page import local_review_prompt, parse_local_review
