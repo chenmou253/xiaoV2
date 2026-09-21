@@ -45,6 +45,14 @@ type EditorService struct {
 	audioIn          io.WriteCloser
 	audioOut         *bufio.Scanner
 	audioDaemonModel string
+
+	translationMu           sync.Mutex
+	translationProcessMu    sync.Mutex
+	translationCmd          *exec.Cmd
+	translationIn           io.WriteCloser
+	translationOut          *bufio.Scanner
+	translationDaemonModel  string
+
 	// audioRestartMu closes the small gap between claiming an audio job and
 	// registering it as the in-process job.  Without it, a restart request
 	// could clear files while the old worker was just about to start writing.
@@ -128,13 +136,15 @@ func draftAudioConfig(d model.TextbookDraft) tts.Config {
 func (s *EditorService) currentModelSettings(ctx context.Context) (ai.Settings, error) {
 	settings := ai.DefaultSettings()
 	var rows []model.SiteSetting
-	if e := s.db.WithContext(ctx).Where("dict_code IN ? AND status=1", []string{"ai.ocr_model", "ai.tts_model", "ai.tts_voice"}).Order("id").Find(&rows).Error; e != nil {
+	if e := s.db.WithContext(ctx).Where("dict_code IN ? AND status=1", []string{"ai.ocr_model", "ai.translation_model", "ai.tts_model", "ai.tts_voice"}).Order("id").Find(&rows).Error; e != nil {
 		return settings, e
 	}
 	for _, row := range rows {
 		switch row.DictCode {
 		case "ai.ocr_model":
 			settings.OCRModel = row.ItemValue
+		case "ai.translation_model":
+			settings.TranslationModel = row.ItemValue
 		case "ai.tts_model":
 			settings.TTSModel = row.ItemValue
 		case "ai.tts_voice":
@@ -145,6 +155,9 @@ func (s *EditorService) currentModelSettings(ctx context.Context) (ai.Settings, 
 	if item, ok := ai.Find(settings.OCRModel); !ok || !item.Enabled {
 		settings.OCRModel = ai.LocalOCRModel
 	}
+	if item, ok := ai.Find(settings.TranslationModel); !ok || !item.Enabled {
+		settings.TranslationModel = ai.CloudTranslationModel
+	}
 	if item, ok := ai.Find(settings.TTSModel); !ok || !item.Enabled || !ai.ValidVoice(settings.TTSModel, settings.TTSVoice) {
 		settings.TTSModel, settings.TTSVoice = ai.LocalTTSModel, "aiden"
 	}
@@ -152,13 +165,16 @@ func (s *EditorService) currentModelSettings(ctx context.Context) (ai.Settings, 
 }
 
 func draftModelSettings(d model.TextbookDraft) ai.Settings {
-	return ai.NormalizeSettings(ai.Settings{OCRModel: d.OCRModel, TTSModel: d.TTSModel, TTSVoice: d.TTSVoice})
+	return ai.NormalizeSettings(ai.Settings{OCRModel: d.OCRModel, TranslationModel: d.TranslationModel, TTSModel: d.TTSModel, TTSVoice: d.TTSVoice})
 }
 
 func pageModelSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Settings {
 	settings := draftModelSettings(d)
 	if p.OCRModel != "" {
 		settings.OCRModel = p.OCRModel
+	}
+	if p.TranslationModel != "" {
+		settings.TranslationModel = p.TranslationModel
 	}
 	if p.TTSModel != "" {
 		settings.TTSModel = p.TTSModel
@@ -183,13 +199,17 @@ func pageAudioSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Sett
 func jobModel(d model.TextbookDraft, kind string) ai.Model {
 	settings := draftModelSettings(d)
 	id := settings.OCRModel
-	if strings.HasPrefix(kind, "audio") {
+	if kind == "translate" {
+		id = settings.TranslationModel
+	} else if strings.HasPrefix(kind, "audio") {
 		id = settings.TTSModel
 	}
 	item, ok := ai.Find(id)
 	if !ok {
 		item, _ = ai.Find(ai.LocalOCRModel)
-		if strings.HasPrefix(kind, "audio") {
+		if kind == "translate" {
+			item, _ = ai.Find(ai.CloudTranslationModel)
+		} else if strings.HasPrefix(kind, "audio") {
 			item, _ = ai.Find(ai.LocalTTSModel)
 		}
 	}
@@ -327,7 +347,7 @@ func (s *EditorService) CreateUpload(ctx context.Context, book, title string, gr
 	if e = copyFile(source, filepath.Join(dir, "source.pdf")); e != nil {
 		return "", e
 	}
-	d := model.TextbookDraft{ID: id, BookID: book, Title: title, Grade: grade, Term: term, Edition: edition, AmericanEnabled: audio.AmericanEnabled, BritishEnabled: audio.BritishEnabled, AmericanVoiceID: audio.AmericanVoiceID, BritishVoiceID: audio.BritishVoiceID, AudioConfigVersion: 1, OCRModel: models.OCRModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "queued", CreatedBy: actor, UpdatedBy: actor}
+	d := model.TextbookDraft{ID: id, BookID: book, Title: title, Grade: grade, Term: term, Edition: edition, AmericanEnabled: audio.AmericanEnabled, BritishEnabled: audio.BritishEnabled, AmericanVoiceID: audio.AmericanVoiceID, BritishVoiceID: audio.BritishVoiceID, AudioConfigVersion: 1, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "queued", CreatedBy: actor, UpdatedBy: actor}
 	e = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if e := tx.Create(&d).Error; e != nil {
 			return e
@@ -368,7 +388,7 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 		if b.AudioConfigVersion == 0 {
 			b.AmericanEnabled, b.BritishEnabled = true, true
 		}
-		d := model.TextbookDraft{ID: id, BookID: book, Title: b.Title, Grade: grade, Term: b.Semester, Edition: b.Publisher, AmericanEnabled: b.AmericanEnabled, BritishEnabled: b.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1, OCRModel: models.OCRModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "draft", CreatedBy: actor, UpdatedBy: actor}
+		d := model.TextbookDraft{ID: id, BookID: book, Title: b.Title, Grade: grade, Term: b.Semester, Edition: b.Publisher, AmericanEnabled: b.AmericanEnabled, BritishEnabled: b.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "draft", CreatedBy: actor, UpdatedBy: actor}
 		if e := tx.Create(&d).Error; e != nil {
 			return e
 		}
@@ -392,7 +412,7 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 			if e != nil {
 				return e
 			}
-			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(raw), Preview: p.Preview, Checked: true, OCRModel: models.OCRModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
+			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(raw), Preview: p.Preview, Checked: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
 			if e = tx.Create(&dp).Error; e != nil {
 				return e
 			}
@@ -749,10 +769,12 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 			}
 			// A user edit unlocks the page for a fresh TTS pass under the current
 			// draft default; OCR provenance remains the last recognized model.
+			p.TranslationModel = draftModelSettings(d).TranslationModel
 			p.TTSModel, p.TTSVoice = draftModelSettings(d).TTSModel, draftModelSettings(d).TTSVoice
 		}
 		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "version": gorm.Expr("version+1")}
 		if generationChanged {
+			pageUpdates["translation_model"] = p.TranslationModel
 			pageUpdates["tts_model"], pageUpdates["tts_voice"] = p.TTSModel, p.TTSVoice
 		}
 		if input.Checked && input.AudioChecked && p.OCRModel == "" {
@@ -1517,6 +1539,15 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 				return bad("单项重试所选的 TTS 模型当前不可用")
 			}
 			selectedModel = item
+		} else if job.Kind == "translate" && job.Page > 0 {
+			var draftPage model.TextbookDraftPage
+			if err := tx.Where("draft_id=? AND position=?", draft.ID, job.Page).First(&draftPage).Error; err != nil {
+				return err
+			}
+			modelID := pageModelSettings(draft, draftPage).TranslationModel
+			if item, ok := ai.Find(modelID); ok {
+				selectedModel = item
+			}
 		} else if strings.HasPrefix(job.Kind, "audio") && job.Page > 0 {
 			var draftPage model.TextbookDraftPage
 			if err := tx.Where("draft_id=? AND position=?", draft.ID, job.Page).First(&draftPage).Error; err != nil {
@@ -1999,7 +2030,7 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	// job record so a completed task cannot be persisted as 1/2 (50%).
 	job.Progress, job.Total = 2, 2
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{"content": string(translated), "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{"content": string(translated), "translation_model": job.ModelID, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 			return e
 		}
 		return tx.Model(&model.TextbookDraft{}).Where("id=?", d.ID).Updates(map[string]any{"version": gorm.Expr("version+1")}).Error
@@ -2115,7 +2146,7 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(content), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
+			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(content), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TranslationModel: draftModelSettings(d).TranslationModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
 			var existing model.TextbookDraftPage
 			e = tx.Where("draft_id=? AND position=?", d.ID, p.Position).First(&existing).Error
 			if errors.Is(e, gorm.ErrRecordNotFound) {
@@ -2130,7 +2161,7 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			if e = tx.Model(&existing).Updates(map[string]any{"printed_page": page.PrintedPage, "title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			if e = tx.Model(&existing).Updates(map[string]any{"printed_page": page.PrintedPage, "title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "translation_model": page.TranslationModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
 			page.ID, page.Version = existing.ID, existing.Version+1
