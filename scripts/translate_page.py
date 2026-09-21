@@ -784,6 +784,47 @@ def batch_review_prompt(items: list[dict[str, Any]]) -> str:
 
 
 
+STRUCTURAL_ID_RE = re.compile(r"^p0*(\d+)-s0*(\d+)(?:-w0*(\d+))?$", re.IGNORECASE)
+
+
+def _canonical_structural_id(value: Any) -> str | None:
+    text = str(value or "").strip()
+    match = STRUCTURAL_ID_RE.fullmatch(text)
+    if not match:
+        return None
+    page = int(match.group(1))
+    segment = int(match.group(2))
+    word = match.group(3)
+    if word is None:
+        return f"p{page}-s{segment}"
+    return f"p{page}-s{segment}-w{int(word)}"
+
+
+def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
+    """Resolve only exact IDs or structurally identical IDs with leading zeros.
+
+    Examples:
+      p053-s012 -> p53-s12
+      p053-s012-w002 -> p53-s12-w2
+
+    No fuzzy edit distance, index correction, or positional guessing is allowed.
+    """
+    raw = str(value or "").strip()
+    if raw in expected_ids:
+        return raw
+    canonical = _canonical_structural_id(raw)
+    if canonical is None:
+        raise ValueError(f"batch translator returned unexpected {label} id: {raw}")
+    matches = [
+        candidate
+        for candidate in expected_ids
+        if _canonical_structural_id(candidate) == canonical
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"batch translator returned unexpected {label} id: {raw}")
+    return matches[0]
+
+
 def parse_batch_translation_partial(
     value: Any, expected: dict[str, set[str]]
 ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
@@ -800,9 +841,10 @@ def parse_batch_translation_partial(
     for raw in payload["segments"]:
         if not isinstance(raw, dict):
             raise ValueError("batch translator segment must be an object")
-        segment_id = str(raw.get("id", "")).strip()
-        if segment_id in result or segment_id not in expected:
-            raise ValueError(f"batch translator returned unexpected segment id: {segment_id}")
+        raw_segment_id = str(raw.get("id", "")).strip()
+        segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
+        if segment_id in result:
+            raise ValueError(f"batch translator returned duplicate segment id: {raw_segment_id}")
         translation = clean_translation(raw.get("translation", ""))
         if not translation:
             raise ValueError(f"batch translator returned empty translation: {segment_id}")
@@ -813,9 +855,10 @@ def parse_batch_translation_partial(
         for word in raw_words:
             if not isinstance(word, dict):
                 raise ValueError(f"batch translator word must be an object: {segment_id}")
-            word_id = str(word.get("id", "")).strip()
-            if word_id in words or word_id not in expected[segment_id]:
-                raise ValueError(f"batch translator returned unexpected word id: {word_id}")
+            raw_word_id = str(word.get("id", "")).strip()
+            word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
+            if word_id in words:
+                raise ValueError(f"batch translator returned duplicate word id: {raw_word_id}")
             meaning = clean_translation(word.get("meaning", ""))
             if not meaning:
                 raise ValueError(f"batch translator returned empty meaning: {word_id}")
@@ -883,9 +926,10 @@ def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[s
     for raw in payload["segments"]:
         if not isinstance(raw, dict):
             raise ValueError("batch translator segment must be an object")
-        segment_id = str(raw.get("id", "")).strip()
-        if segment_id in result or segment_id not in expected:
-            raise ValueError(f"batch translator returned unexpected segment id: {segment_id}")
+        raw_segment_id = str(raw.get("id", "")).strip()
+        segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
+        if segment_id in result:
+            raise ValueError(f"batch translator returned duplicate segment id: {raw_segment_id}")
         translation = clean_translation(raw.get("translation", ""))
         if not translation:
             raise ValueError(f"batch translator returned empty translation: {segment_id}")
@@ -896,9 +940,10 @@ def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[s
         for word in raw_words:
             if not isinstance(word, dict):
                 raise ValueError(f"batch translator word must be an object: {segment_id}")
-            word_id = str(word.get("id", "")).strip()
-            if word_id in words or word_id not in expected[segment_id]:
-                raise ValueError(f"batch translator returned unexpected word id: {word_id}")
+            raw_word_id = str(word.get("id", "")).strip()
+            word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
+            if word_id in words:
+                raise ValueError(f"batch translator returned duplicate word id: {raw_word_id}")
             meaning = clean_translation(word.get("meaning", ""))
             if not meaning:
                 raise ValueError(f"batch translator returned empty meaning: {word_id}")
@@ -951,13 +996,16 @@ def parse_batch_review(
         required = {"segment_id", "word_id", "field", "reason", "suggestion"}
         if not isinstance(raw, dict) or set(raw) != required:
             raise ValueError("batch reviewer issue has an invalid shape")
-        segment_id = str(raw["segment_id"]).strip()
-        word_id = str(raw["word_id"]).strip()
+        raw_segment_id = str(raw["segment_id"]).strip()
+        try:
+            segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
+        except ValueError as exc:
+            raise ValueError(f"batch reviewer returned unexpected segment id: {raw_segment_id}") from exc
+        raw_word_id = str(raw["word_id"]).strip()
+        word_id = raw_word_id
         field = str(raw["field"]).strip()
         reason = str(raw["reason"]).strip()
         suggestion = str(raw["suggestion"]).strip()
-        if segment_id not in expected:
-            raise ValueError(f"batch reviewer returned unexpected segment id: {segment_id}")
         if field not in {"translation", "meaning", "phonetic"} or not reason:
             raise ValueError("batch reviewer issue has an invalid field or reason")
         if field == "translation":
@@ -970,8 +1018,10 @@ def parse_batch_review(
             result[segment_id]["issues"].append(reason)
             result[segment_id]["passed"] = False
         else:
-            if word_id not in expected[segment_id]:
-                raise ValueError(f"batch reviewer returned unexpected word id: {word_id}")
+            try:
+                word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
+            except ValueError as exc:
+                raise ValueError(f"batch reviewer returned unexpected word id: {raw_word_id}") from exc
             word_result = result[segment_id]["words"][word_id]
             if field == "meaning":
                 correction = clean_translation(suggestion)
