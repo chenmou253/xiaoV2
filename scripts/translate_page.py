@@ -132,6 +132,11 @@ Critical structure rules:
 - Output exactly one segments element for every input item, in the same order.
 - Inside each segment, output exactly one words element for every input word, in the same order.
 - Never add, omit, merge, split, or reorder segments or words.
+- NEVER omit a word object just because you are unsure of its answer.
+- If you cannot confidently determine a word's Chinese meaning, still return that word object with "meaning": "".
+- If you cannot confidently determine its General American IPA, still return that word object with "phonetic": "".
+- If both are unknown, return {"meaning":"","phonetic":""} for that position.
+- Empty strings are valid placeholders. The number of output word objects MUST always equal the number of input words.
 - Every translation and meaning must be a JSON string.
 - Every phonetic must be a JSON string.
 
@@ -1000,7 +1005,8 @@ def local_translation_prompt(items: list[dict[str, Any]]) -> str:
         "Translate the following ordered textbook batch. "
         "The top-level context is shared by all items and is background only; do not translate it. "
         "Do not output or reconstruct any source IDs. "
-        "Keep the number and order of segments and words exactly unchanged.\n\n"
+        "Keep the number and order of segments and words exactly unchanged. "
+        "Never omit a word object; use empty strings for unknown meaning or phonetic values.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -1042,10 +1048,10 @@ def parse_local_translation(
                 raise LocalStructureError(
                     f"local translator word {segment_index}:{word_index} has an invalid shape"
                 )
-            meaning = clean_translation(raw_word.get("meaning", ""))
-            if not meaning:
+            meaning_value = raw_word.get("meaning")
+            if not isinstance(meaning_value, str):
                 raise ValueError(
-                    f"local translator returned empty meaning at {segment_index}:{word_index}"
+                    f"local translator returned invalid meaning at {segment_index}:{word_index}"
                 )
             phonetic_value = raw_word.get("phonetic")
             if not isinstance(phonetic_value, str):
@@ -1053,7 +1059,7 @@ def parse_local_translation(
                     f"local translator returned invalid phonetic at {segment_index}:{word_index}"
                 )
             words[str(source_word["id"])] = {
-                "meaning": meaning,
+                "meaning": clean_translation(meaning_value),
                 "phonetic": clean_phonetic(phonetic_value),
             }
         result[str(item["id"])] = {
@@ -1751,9 +1757,9 @@ def validate_complete_candidates(
                 raise LocalStructureError(
                     f"local translator word candidate is invalid: {word_id}"
                 )
-            if not clean_translation(word.get("meaning", "")):
-                raise ValueError(
-                    f"local translator returned empty meaning: {word_id}"
+            if not isinstance(word.get("meaning"), str):
+                raise LocalStructureError(
+                    f"local translator returned invalid meaning: {word_id}"
                 )
             if not isinstance(word.get("phonetic"), str):
                 raise LocalStructureError(
@@ -2022,7 +2028,15 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
         for word_id, word_result in result["words"].items():
             word = words_by_id[word_id]
             source = normalize_source_text(word.get("text", ""))
-            word["meaning"] = word_result["meaning"]
+            word_issues = list(word_result["issues"])
+            meaning = clean_translation(word_result.get("meaning", ""))
+            if meaning:
+                word["meaning"] = meaning
+            else:
+                empty_issue = "empty meaning placeholder; manual review required"
+                if empty_issue not in word_issues:
+                    word_issues.append(empty_issue)
+
             if not str(word.get("phonetic", "") or "").strip():
                 phonetic = clean_phonetic(word_result.get("phonetic", ""))
                 # A model occasionally echoes the English token instead of IPA.
@@ -2031,18 +2045,22 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
                     phonetic_filled += 1
                 else:
                     phonetic_missing += 1
+                    empty_phonetic_issue = "empty or invalid phonetic placeholder; manual review required"
+                    if empty_phonetic_issue not in word_issues:
+                        word_issues.append(empty_phonetic_issue)
+
             translated += 1
-            if word_result["issues"]:
+            if word_issues:
                 failed += 1
             log_translation(
                 kind="word",
                 target=source,
                 context=target_sentence(segment),
                 result=TranslationResult(
-                    word_result["meaning"],
+                    meaning or str(word.get("meaning", "") or ""),
                     word_result.get("score"),
-                    word_result["issues"],
-                    "REVIEW_WARNING" if review_failed else "PASS" if not word_result["issues"] else "WARNING",
+                    word_issues,
+                    "REVIEW_WARNING" if review_failed else "PASS" if not word_issues else "WARNING",
                 ),
             )
 
