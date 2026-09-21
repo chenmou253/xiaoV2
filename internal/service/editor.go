@@ -40,7 +40,7 @@ type EditorService struct {
 	// audioProcessMu protects the long-lived daemon handles.  It is separate
 	// from audioMu so an administrator can terminate a stuck daemon while the
 	// worker goroutine is blocked waiting for its output.
-	audioProcessMu sync.Mutex
+	audioProcessMu   sync.Mutex
 	audioCmd         *exec.Cmd
 	audioIn          io.WriteCloser
 	audioOut         *bufio.Scanner
@@ -2079,6 +2079,37 @@ func translationSpellingHint(value string) bool {
 	return strings.Contains(value, "拼写错误") || strings.Contains(value, "拼写有误")
 }
 
+func issuePreview(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > 28 {
+		return string(runes[:28]) + "…"
+	}
+	return value
+}
+
+func segmentIssueLocation(index int, id, text string) string {
+	location := fmt.Sprintf("第%d个片段", index+1)
+	if id != "" {
+		location += fmt.Sprintf("（%s）", id)
+	}
+	if preview := issuePreview(text); preview != "" {
+		location += fmt.Sprintf("「%s」", preview)
+	}
+	return location
+}
+
+func wordIssueLocation(segmentLocation string, index int, id, text string) string {
+	location := fmt.Sprintf("%s · 第%d个单词", segmentLocation, index+1)
+	if id != "" {
+		location += fmt.Sprintf("（%s）", id)
+	}
+	if preview := issuePreview(text); preview != "" {
+		location += fmt.Sprintf("「%s」", preview)
+	}
+	return location
+}
+
 func publicationIssues(content map[string]any) []string {
 	segments, ok := content["segments"].([]any)
 	if !ok {
@@ -2086,53 +2117,55 @@ func publicationIssues(content map[string]any) []string {
 	}
 	issues := []string{}
 	ids := map[string]bool{}
-	for _, raw := range segments {
+	for segmentIndex, raw := range segments {
 		s, ok := raw.(map[string]any)
 		if !ok {
-			issues = append(issues, "片段格式无效")
+			issues = append(issues, fmt.Sprintf("第%d个片段：片段格式无效", segmentIndex+1))
 			continue
 		}
 		id, _ := s["id"].(string)
 		text, _ := s["text"].(string)
 		translation, _ := s["translation"].(string)
 		words, ok := s["words"].([]any)
+		segmentLocation := segmentIssueLocation(segmentIndex, id, text)
 		if rawMode, exists := s["audio_mode"]; exists {
 			mode, modeOK := rawMode.(string)
 			if !modeOK || (mode != "sentence_and_words" && mode != "word_only" && mode != "none") {
-				issues = append(issues, "片段音频模式无效")
+				issues = append(issues, segmentLocation+"：片段音频模式无效")
 			}
 		}
 		if id == "" || ids[id] {
-			issues = append(issues, "片段 ID 为空或重复")
+			issues = append(issues, segmentLocation+"：片段 ID 为空或重复")
 		}
 		ids[id] = true
 		if strings.TrimSpace(text) == "" || strings.TrimSpace(translation) == "" {
-			issues = append(issues, "片段英文或翻译为空")
+			issues = append(issues, segmentLocation+"：片段英文或翻译为空")
 		}
 		if !validAnchor(s["anchor"]) {
-			issues = append(issues, "整句按钮位置无效")
+			issues = append(issues, segmentLocation+"：整句按钮位置无效")
 		}
 		if !ok || len(words) == 0 {
-			issues = append(issues, "片段词项为空")
+			issues = append(issues, segmentLocation+"：片段词项为空")
 		}
-		for _, rw := range words {
+		for wordIndex, rw := range words {
 			w, _ := rw.(map[string]any)
 			wid, _ := w["id"].(string)
 			wt, _ := w["text"].(string)
 			meaning, _ := w["meaning"].(string)
+			wordLocation := wordIssueLocation(segmentLocation, wordIndex, wid, wt)
 			if wid == "" || ids[wid] || wt == "" || meaning == "" {
-				issues = append(issues, "单词 ID、英文或词义无效")
+				issues = append(issues, wordLocation+"：单词 ID、英文或词义无效")
 			}
 			if translationSpellingHint(meaning) {
-				issues = append(issues, wt+"：翻译模型提示拼写错误，请人工核对")
+				issues = append(issues, wordLocation+"：翻译模型提示拼写错误，请人工核对")
 			}
 			if regexp.MustCompile(`[A-Za-z]`).MatchString(wt) {
 				phonetic, _ := w["phonetic"].(string)
 				if strings.TrimSpace(phonetic) == "" {
-					issues = append(issues, wt+"：缺少音标")
+					issues = append(issues, wordLocation+"：缺少音标")
 				}
 				if !unitArray(w["box"], 4, true) {
-					issues = append(issues, wt+"：单词框无效")
+					issues = append(issues, wordLocation+"：单词框无效")
 				}
 			}
 			ids[wid] = true

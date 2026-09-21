@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // clearDraftPageArtifacts removes generated data that belongs exclusively to
@@ -115,9 +116,17 @@ func removePageFromAudioManifest(path string, page int) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	// Publish the new manifest before deleting now-unreferenced files. Readers
-	// that load the new mapping can never observe a missing shared cache file.
+	// Page cleanup must never delete shared word-cache files. A word cache entry
+	// is book-wide and can still be referenced by historical pages in database
+	// state even when an older/incomplete manifest no longer lists every
+	// reference. Page-specific sentence/failed-audio directories were already
+	// removed above. Shared word audio is only replaced explicitly by word
+	// regeneration/manual upload; orphan cleanup, if ever needed, must be a
+	// separate book-wide reconciliation pass.
 	for file := range removedFiles {
+		if strings.HasPrefix(filepath.ToSlash(file), "word-cache/") {
+			continue
+		}
 		if target, ok := safeManifestTarget(ttsRoot, file); ok {
 			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err

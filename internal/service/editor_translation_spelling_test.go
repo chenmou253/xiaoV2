@@ -5,21 +5,41 @@ import (
 	"testing"
 )
 
+func TestPublicationIssuesIncludesSegmentLocation(t *testing.T) {
+	content := map[string]any{
+		"segments": []any{
+			map[string]any{
+				"id":          "p1-s0",
+				"text":        "Hello there.",
+				"translation": "",
+				"words":       []any{},
+			},
+		},
+	}
+	issues := publicationIssues(content)
+	for _, issue := range issues {
+		if strings.Contains(issue, "第1个片段（p1-s0）") && strings.Contains(issue, "片段英文或翻译为空") {
+			return
+		}
+	}
+	t.Fatalf("expected a located empty-translation issue, got %#v", issues)
+}
+
 func TestPublicationIssuesFlagsTranslationSpellingErrorHint(t *testing.T) {
 	content := map[string]any{
 		"segments": []any{
 			map[string]any{
-				"id": "p1-s0",
-				"text": "hospita",
+				"id":          "p1-s0",
+				"text":        "hospita",
 				"translation": "医院",
-				"anchor": []any{0.1, 0.1, 0.2, 0.05},
+				"anchor":      []any{0.1, 0.1, 0.2, 0.05},
 				"words": []any{
 					map[string]any{
-						"id": "p1-s0-w0",
-						"text": "hospita",
-						"meaning": "医院（拼写错误，应为hospital）",
+						"id":       "p1-s0-w0",
+						"text":     "hospita",
+						"meaning":  "医院（拼写错误，应为hospital）",
 						"phonetic": "ˈhɑspɪtəl",
-						"box": []any{0.1, 0.1, 0.1, 0.03},
+						"box":      []any{0.1, 0.1, 0.1, 0.03},
 					},
 				},
 			},
@@ -28,7 +48,7 @@ func TestPublicationIssuesFlagsTranslationSpellingErrorHint(t *testing.T) {
 	issues := publicationIssues(content)
 	found := false
 	for _, issue := range issues {
-		if strings.Contains(issue, "hospita：翻译模型提示拼写错误") {
+		if strings.Contains(issue, "hospita") && strings.Contains(issue, "翻译模型提示拼写错误") {
 			found = true
 			break
 		}
@@ -42,17 +62,17 @@ func TestPublicationIssuesFlagsAlternateSpellingHint(t *testing.T) {
 	content := map[string]any{
 		"segments": []any{
 			map[string]any{
-				"id": "p1-s0",
-				"text": "hospita",
+				"id":          "p1-s0",
+				"text":        "hospita",
 				"translation": "医院",
-				"anchor": []any{0.1, 0.1, 0.2, 0.05},
+				"anchor":      []any{0.1, 0.1, 0.2, 0.05},
 				"words": []any{
 					map[string]any{
-						"id": "p1-s0-w0",
-						"text": "hospita",
-						"meaning": "医院（拼写有误，应为hospital）",
+						"id":       "p1-s0-w0",
+						"text":     "hospita",
+						"meaning":  "医院（拼写有误，应为hospital）",
 						"phonetic": "ˈhɑspɪtəl",
-						"box": []any{0.1, 0.1, 0.1, 0.03},
+						"box":      []any{0.1, 0.1, 0.1, 0.03},
 					},
 				},
 			},
@@ -68,17 +88,17 @@ func TestPublicationIssuesAllowsNormalMeaning(t *testing.T) {
 	content := map[string]any{
 		"segments": []any{
 			map[string]any{
-				"id": "p1-s0",
-				"text": "hospital",
+				"id":          "p1-s0",
+				"text":        "hospital",
 				"translation": "医院",
-				"anchor": []any{0.1, 0.1, 0.2, 0.05},
+				"anchor":      []any{0.1, 0.1, 0.2, 0.05},
 				"words": []any{
 					map[string]any{
-						"id": "p1-s0-w0",
-						"text": "hospital",
-						"meaning": "医院",
+						"id":       "p1-s0-w0",
+						"text":     "hospital",
+						"meaning":  "医院",
 						"phonetic": "ˈhɑspɪtəl",
-						"box": []any{0.1, 0.1, 0.1, 0.03},
+						"box":      []any{0.1, 0.1, 0.1, 0.03},
 					},
 				},
 			},

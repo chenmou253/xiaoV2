@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"xiaov2/internal/ai"
@@ -250,6 +252,64 @@ func (h *EditorHandler) RegenerateAudioItem(c *gin.Context) {
 	}
 	if e := h.service.RegenerateAudioItem(c.Request.Context(), c.Param("draftId"), p, c.Param("itemId"), in.Accent, in.Text, in.Version, identity(c).ID); e != nil {
 		writePlatformError(c, e)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
+func (h *EditorHandler) UploadAudioItem(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
+	if err := c.Request.ParseMultipartForm(12 << 20); err != nil {
+		failure(c, http.StatusBadRequest, 40000, "音频上传失败，文件上限 12MB")
+		return
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40000, "请选择音频文件")
+		return
+	}
+	defer file.Close()
+	if strings.ToLower(filepath.Ext(header.Filename)) != ".wav" {
+		failure(c, http.StatusBadRequest, 40000, "目前只支持 WAV 音频，请先将 MP3/M4A 等格式转换为 WAV")
+		return
+	}
+	tmp, err := os.CreateTemp("", "xiaov2-manual-audio-*")
+	if err != nil {
+		writePlatformError(c, err)
+		return
+	}
+	source := tmp.Name()
+	defer os.Remove(source)
+	if _, err = io.Copy(tmp, io.LimitReader(file, (12<<20)+1)); err != nil {
+		_ = tmp.Close()
+		writePlatformError(c, err)
+		return
+	}
+	if err = tmp.Close(); err != nil {
+		writePlatformError(c, err)
+		return
+	}
+	if info, statErr := os.Stat(source); statErr != nil || info.Size() == 0 || info.Size() > 12<<20 {
+		failure(c, http.StatusBadRequest, 40000, "音频文件为空或超过 12MB")
+		return
+	}
+	version, err := strconv.ParseUint(c.PostForm("version"), 10, 64)
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40000, "草稿版本无效")
+		return
+	}
+	if err = h.service.UploadAudioItem(
+		c.Request.Context(), c.Param("draftId"), p, c.Param("itemId"),
+		c.PostForm("text"), source, version, identity(c).ID,
+	); err != nil {
+		writePlatformError(c, err)
 		return
 	}
 	success(c, gin.H{"ok": true})

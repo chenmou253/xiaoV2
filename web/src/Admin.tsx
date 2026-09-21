@@ -1280,6 +1280,27 @@ function Drafts({
     }
   }
 
+  async function uploadAudioItem(itemID: string, kind: "sentence" | "word", text: string, file: File) {
+    if (!detail || !page || processing) return;
+    const ok = await runResult(async () => {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("text", text);
+      form.append("version", String(detail.draft.version));
+      await api(`/admin/drafts/${encodeURIComponent(id)}/pages/${pageNo}/audio/${encodeURIComponent(itemID)}/upload`, {
+        method: "POST",
+        body: form,
+      });
+      await Promise.all([loadDetail(id, pageNo), loadPage(), loadAudioIssues(id, pageNo)]);
+      notice(kind === "word"
+        ? `单词“${text}”的人工音频已上传；整本教材同词将共用这条音频`
+        : `句子“${text}”的人工音频已上传；只替换当前句子`);
+    });
+    if (!ok) {
+      throw new Error(kind === "word" ? "上传单词音频失败" : "上传句子音频失败");
+    }
+  }
+
   async function queueAudio() {
     if (!audioRequired) {
       notice("当前草稿已关闭所有发音，本页只确认 OCR，不会生成音频");
@@ -1848,6 +1869,7 @@ function Drafts({
                       }
                     }}
                     onRegenerateAudio={regenerateAudioItem}
+                    onUploadAudio={uploadAudioItem}
                   />
                   <label>
                     页面 JSON

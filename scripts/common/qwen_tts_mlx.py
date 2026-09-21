@@ -17,25 +17,33 @@ import numpy as np
 
 DEFAULT_MODEL = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 
-US_SENTENCE_INSTRUCT = """Use aiden's natural adult male voice.
-Keep the speaker identity, timbre, vocal weight, and pitch range consistent.
-Do not imitate a child, female speaker, or another speaker.
+US_SENTENCE_INSTRUCT = """Keep the speaker identity, timbre, vocal weight, and pitch range consistent.
 Speak in clear, natural General American English.
 Use neutral textbook narration.
 Pronounce every word clearly and accurately.
 Use a moderate speaking speed.
 Use a speaking speed appropriate for Chinese children aged 12 and under.
 Do not add, omit, or repeat words.
-End the audio cleanly."""
+End the audio cleanly.
+This is an elementary-school phonics lesson.
+When a phonics grapheme appears inside quotation marks, pronounce its phonics sound,not the individual letter names.
+For "ph", pronounce only the /f/ sound, as in "phone".
+Do not pronounce it as "P H".
+Read the rest of the sentence naturally in General American English."""
 
-US_WORD_INSTRUCT = """Use aiden's natural adult male voice.
-Keep exactly the same speaker identity and timbre.
-Do not imitate a child, female speaker, or another speaker.
-Pronounce only this English word once in clear General American English.
-Use dictionary-quality pronunciation.
+US_WORD_INSTRUCT = """Keep the speaker identity, timbre, vocal weight, and pitch range consistent.
+Speak in clear, natural General American English.
+Use neutral textbook narration.
+Pronounce every word clearly and accurately.
+Use a moderate speaking speed.
 Use a speaking speed appropriate for Chinese children aged 12 and under.
-Do not explain or repeat the word.
-End immediately after pronunciation."""
+Do not add, omit, or repeat words.
+End the audio cleanly.
+This is an elementary-school phonics lesson.
+When a phonics grapheme appears inside quotation marks, pronounce its phonics sound,not the individual letter names.
+For "ph", pronounce only the /f/ sound, as in "phone".
+Do not pronounce it as "P H".
+Read the rest of the sentence naturally in General American English."""
 
 UK_SENTENCE_INSTRUCT = """Speak in clear, natural Standard British English.
 Use a neutral educated British accent similar to modern RP.
