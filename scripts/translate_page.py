@@ -890,9 +890,11 @@ def expected_for_items(items: list[dict[str, Any]]) -> dict[str, set[str]]:
 
 
 def _is_local_retryable_structure_error(exc: Exception) -> bool:
-    # Local inference is free and may retry only model-output structure errors.
-    # Network/provider/auth/runtime errors are never retried here.
-    return isinstance(exc, (json.JSONDecodeError, CompletionTruncated))
+    # Local inference is free and may retry only malformed/truncated output.
+    # Network/provider/auth/runtime and semantic validation errors are not retried.
+    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated)):
+        return True
+    return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
 
 
 def _local_structured_call(
@@ -1035,9 +1037,9 @@ def missing_translation_items(
     supplement_expected: dict[str, set[str]] = {}
     for item in items:
         segment_id = str(item["id"])
-        missing_ids = missing.get(segment_id)
-        if not missing_ids:
+        if segment_id not in missing:
             continue
+        missing_ids = missing[segment_id]
         words = [word for word in item["words"] if word["id"] in missing_ids]
         supplement.append(
             {
