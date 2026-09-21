@@ -117,121 +117,58 @@ BATCH_REVIEWER_SYSTEM_PROMPT = (
     + "Correct an omitted, dialect-mismatched, or otherwise incorrect phonetic when you can determine it. Keep reasons brief and suggestions limited to the corrected field. Never output reasoning, Markdown, or a code fence."
 )
 
-LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translation engine for children's English textbooks.
+LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic translation engine for children's English textbooks.
 
-Your entire response MUST be exactly one valid JSON object.
-Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
+Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, or reasoning.
 
-The input contains:
-- segment_count: the exact number of sentence segments.
-- items: sentence segments identified ONLY by temporary zero-based segment_index.
-- word_count: the exact number of words inside that segment.
-- words: words identified ONLY by temporary zero-based word_index.
-
-These temporary numeric indexes are not source/business IDs. Copy them exactly.
-
-Return exactly this shape:
-{"segments":[{"segment_index":0,"translation":"...","words":[{"word_index":0,"meaning":"...","phonetic":"..."}]}]}
-
-Critical structure rules:
-- NEVER output or invent source IDs such as p54-s0 or p54-s0-w0.
-- Return exactly segment_count segment objects.
-- Return every segment_index from 0 through segment_count-1 exactly once.
-- For each segment, return exactly word_count word objects.
-- Return every word_index from 0 through word_count-1 exactly once.
-- Do not add, omit, merge, duplicate, or renumber any segment or word.
-- Order may vary because segment_index and word_index are authoritative.
-- Every translation and meaning must be a JSON string.
-- Every phonetic must be a JSON string.
-
-Translation rules:
-- Translate only target_text into concise natural Simplified Chinese suitable for Chinese students.
-- Use context only to resolve ambiguity; never translate extra context.
-- Preserve meaning, negation, names, numbers, dates, times, and factual information.
-- For each word, return a concise Simplified Chinese dictionary-style meaning for that exact occurrence and grammatical role.
-- Do not return the whole sentence as a word meaning.
-- For every pronounceable English word, return General American English IPA with stress where appropriate.
-- Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
-- Return an empty phonetic string only when the source is not pronounceable as an English word.
-"""
-
-LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structured children's English textbook translations.
-
-Your entire response MUST be exactly one valid JSON object.
-Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
-
-The input contains ordered candidate segments and ordered candidate words. Do NOT output any source IDs.
-Return exactly:
-{"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
+Output protocol:
+S<TAB>segment_index<TAB>Chinese sentence translation
+W<TAB>segment_index<TAB>word_index<TAB>Chinese word meaning<TAB>General American IPA
 
 Rules:
-- Return {"issues":[]} when everything is acceptable.
-- segment_index is the zero-based position in the supplied segments array.
-- For sentence translation issues, word_index MUST be -1 and field MUST be "translation".
-- For word issues, word_index is the zero-based word position inside that segment and field MUST be "meaning" or "phonetic".
-- Never invent an index outside the supplied arrays.
-- Include only actual errors.
-- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and information not present in the source.
-- Check that each word meaning is a standalone lexical gloss for that exact occurrence.
-- Check that phonetics are General American English IPA, including stress where appropriate, with rhotic /r/ and American /oʊ/ where applicable.
-- suggestion contains only the corrected value for the named field.
+- Output exactly one S line for every supplied SEGMENT.
+- Output exactly one W line for every supplied WORD.
+- Copy segment_index and word_index exactly.
+- Never add, omit, merge, duplicate, or renumber any item.
+- Do not output source/business IDs.
+- Do not put TAB or newline characters inside translation, meaning, or phonetic fields.
+- Translate only the target sentence, using context only to resolve ambiguity.
+- Use concise natural Simplified Chinese suitable for Chinese students.
+- Preserve negation, names, numbers, dates, times, and factual information.
+- Each word meaning must be a standalone Chinese dictionary-style gloss for that exact occurrence and grammatical role.
+- Do not translate the whole sentence as a word meaning.
+- For every pronounceable English word, return General American English IPA with stress where appropriate.
+- Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
+- Use an empty final phonetic field only when the source is not pronounceable as an English word.
+
+Example:
+S<TAB>0<TAB>它是什么颜色？
+W<TAB>0<TAB>0<TAB>什么<TAB>wʌt
+W<TAB>0<TAB>1<TAB>颜色<TAB>ˈkʌlər
 """
 
-LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "segments": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "segment_index": {"type": "integer", "minimum": 0},
-                    "translation": {"type": "string"},
-                    "words": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "word_index": {"type": "integer", "minimum": 0},
-                                "meaning": {"type": "string"},
-                                "phonetic": {"type": "string"},
-                            },
-                            "required": ["word_index", "meaning", "phonetic"],
-                        },
-                    },
-                },
-                "required": ["segment_index", "translation", "words"],
-            },
-        }
-    },
-    "required": ["segments"],
-}
+LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for children's English textbook translations.
 
-LOCAL_REVIEW_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "issues": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "segment_index": {"type": "integer", "minimum": 0},
-                    "word_index": {"type": "integer", "minimum": -1},
-                    "field": {"type": "string", "enum": ["translation", "meaning", "phonetic"]},
-                    "reason": {"type": "string"},
-                    "suggestion": {"type": "string"},
-                },
-                "required": ["segment_index", "word_index", "field", "reason", "suggestion"],
-            },
-        }
-    },
-    "required": ["issues"],
-}
+Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, or reasoning.
+
+If everything is acceptable, return exactly:
+OK
+
+If there are errors, return one correction per line:
+S<TAB>segment_index<TAB>translation<TAB>short reason<TAB>corrected translation
+W<TAB>segment_index<TAB>word_index<TAB>meaning<TAB>short reason<TAB>corrected meaning
+W<TAB>segment_index<TAB>word_index<TAB>phonetic<TAB>short reason<TAB>corrected General American IPA
+
+Rules:
+- Never output OK together with correction lines.
+- Use only supplied temporary zero-based indexes.
+- Do not output source/business IDs.
+- Do not put TAB or newline characters inside reason or suggestion fields.
+- Include only actual errors.
+- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and unsupported information.
+- Check every word meaning against that exact occurrence and grammatical role.
+- Check General American IPA, including stress, rhotic /r/, and American /oʊ/ where applicable.
+"""
 
 SINGLE_REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
