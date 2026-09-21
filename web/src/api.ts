@@ -25,9 +25,9 @@ export type PageContent=BookPage&{segments:Segment[]};
 export type Identity={id:number;email:string;kind:'student'|'admin';permissions:string[]};
 export type SiteConfig={email_enabled:boolean;email_mode:'local'|'smtp'|'disabled'};
 export type SiteSetting={id:number;dict_code:string;item_label:string;item_value:string;sort:number;status:0|1;remark:string|null;created_at:string;updated_at:string};
-export type AIModel={id:string;name:string;type:'ocr'|'tts';provider:string;enabled:boolean;cloud:boolean;available:boolean;unavailable_reason?:string;capabilities:string[];default_voice?:string;retry_policy:string};
+export type AIModel={id:string;name:string;type:'ocr'|'translation'|'tts';provider:string;enabled:boolean;cloud:boolean;available:boolean;unavailable_reason?:string;capabilities:string[];default_voice?:string;retry_policy:string};
 export type AIVoice={id:string;name:string;display_name:string};
-export type AIModelSettings={ocr_model:string;tts_model:string;tts_voice:string};
+export type AIModelSettings={ocr_model:string;translation_model:string;tts_model:string;tts_voice:string};
 
 export const booksAPI={
   list:(signal?:AbortSignal)=>api<Book[]>('/books',signal),
