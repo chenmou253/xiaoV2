@@ -310,12 +310,19 @@ func (s *PlatformService) SaveModelSettings(ctx context.Context, value ai.Settin
 	if !ok || ocr.Type != "ocr" || !ocr.Enabled {
 		return bad("OCR 模型无效")
 	}
+	translationModel, ok := ai.Find(value.TranslationModel)
+	if !ok || translationModel.Type != "translation" || !translationModel.Enabled {
+		return bad("翻译模型无效")
+	}
 	ttsModel, ok := ai.Find(value.TTSModel)
 	if !ok || ttsModel.Type != "tts" || !ttsModel.Enabled {
 		return bad("TTS 模型无效")
 	}
 	if !ocr.Available {
 		return bad("OCR 模型当前不可用：" + ocr.UnavailableReason)
+	}
+	if !translationModel.Available {
+		return bad("翻译模型当前不可用：" + translationModel.UnavailableReason)
 	}
 	if !ttsModel.Available {
 		return bad("TTS 模型当前不可用：" + ttsModel.UnavailableReason)
