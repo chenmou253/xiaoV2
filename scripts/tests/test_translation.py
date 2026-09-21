@@ -613,3 +613,55 @@ class TranslationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_batch_translation_accepts_leading_zero_id_variants(self):
+        from translate_page import parse_batch_translation
+
+        expected = {"p53-s12": {"p53-s12-w2"}}
+        raw = json.dumps(
+            {
+                "segments": [
+                    {
+                        "id": "p053-s012",
+                        "translation": "电话",
+                        "words": [
+                            {
+                                "id": "p053-s012-w002",
+                                "meaning": "电话",
+                                "phonetic": "foʊn",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_batch_translation(raw, expected)
+        self.assertIn("p53-s12", parsed)
+        self.assertIn("p53-s12-w2", parsed["p53-s12"]["words"])
+
+    def test_batch_translation_rejects_real_id_change(self):
+        from translate_page import parse_batch_translation
+
+        expected = {"p53-s12": {"p53-s12-w2"}}
+        raw = json.dumps(
+            {
+                "segments": [
+                    {
+                        "id": "p53-s12",
+                        "translation": "电话",
+                        "words": [
+                            {
+                                "id": "p53-s12-w3",
+                                "meaning": "电话",
+                                "phonetic": "foʊn",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with self.assertRaises(ValueError):
+            parse_batch_translation(raw, expected)
