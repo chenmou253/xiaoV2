@@ -19,13 +19,14 @@ import (
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"xiaov2/internal/ai"
 	"xiaov2/internal/config"
 	"xiaov2/internal/model"
 	"xiaov2/internal/resource"
 	"xiaov2/internal/tts"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type EditorService struct {
