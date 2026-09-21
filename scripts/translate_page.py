@@ -990,7 +990,7 @@ def parse_local_translation(
     if not isinstance(raw_segments, list):
         raise LocalStructureError("local translator segments must be an array")
     if len(raw_segments) != len(items):
-        raise ValueError(
+        raise LocalStructureError(
             f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
         )
 
@@ -1006,14 +1006,14 @@ def parse_local_translation(
             raise LocalStructureError(f"local translator words must be an array at segment {segment_index}")
         expected_words = item["words"]
         if len(raw_words) != len(expected_words):
-            raise ValueError(
+            raise LocalStructureError(
                 f"local translator word count mismatch at segment {segment_index}: "
                 f"got {len(raw_words)}, want {len(expected_words)}"
             )
         words: dict[str, dict[str, str]] = {}
         for word_index, (raw_word, source_word) in enumerate(zip(raw_words, expected_words)):
             if not isinstance(raw_word, dict) or set(raw_word) != {"meaning", "phonetic"}:
-                raise ValueError(
+                raise LocalStructureError(
                     f"local translator word {segment_index}:{word_index} has an invalid shape"
                 )
             meaning = clean_translation(raw_word.get("meaning", ""))
@@ -1112,7 +1112,7 @@ def parse_local_review(
             result[segment_id]["passed"] = False
         else:
             if word_index < 0 or word_index >= len(item["words"]):
-                raise ValueError(
+                raise LocalStructureError(
                     f"local reviewer word_index out of range: {segment_index}:{word_index}"
                 )
             word_id = str(item["words"][word_index]["id"])
