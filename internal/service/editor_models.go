@@ -132,24 +132,10 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 			return err
 		}
 
-		if translationChanged {
-			for index := range pages {
-				page := &pages[index]
-				// Text-confirmed pages keep the model that produced the accepted
-				// translation. Only text-unlocked pages follow the new default.
-				if page.Checked {
-					continue
-				}
-				page.TranslationModel = settings.TranslationModel
-				if err := tx.Model(page).Updates(map[string]any{
-					"translation_model": settings.TranslationModel,
-					"version": gorm.Expr("version+1"),
-				}).Error; err != nil {
-					return err
-				}
-				page.Version++
-			}
-		}
+		// Unlocked pages follow the draft translation default dynamically.
+		// Do not overwrite their page snapshot here: translation_model records
+		// the model that actually produced the current translation and is
+		// updated only when a translation job succeeds.
 		if ttsChanged {
 			for index := range pages {
 				page := &pages[index]
