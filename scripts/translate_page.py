@@ -117,60 +117,109 @@ BATCH_REVIEWER_SYSTEM_PROMPT = (
     + "Correct an omitted, dialect-mismatched, or otherwise incorrect phonetic when you can determine it. Keep reasons brief and suggestions limited to the corrected field. Never output reasoning, Markdown, or a code fence."
 )
 
-LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic translation engine for children's English textbooks.
+LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translation engine for children's English textbooks.
 
-Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, reasoning, indexes, IDs, or counts.
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
 
-Output protocol uses the REAL TAB character U+0009 between fields. Do not write the literal text <TAB>.
-S\tChinese sentence translation
-W\tChinese word meaning\tGeneral American IPA
+The input contains an ordered "items" array. Each item contains one target sentence, its context, and an ordered words array.
+Return exactly this shape:
+{"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
 
-Critical ordering rules:
-- Process the input SEGMENT blocks strictly from top to bottom.
-- For each SEGMENT, output exactly one S line first.
-- Immediately after that S line, output exactly one W line for each supplied WORD, in the same order as those WORD lines.
-- Do not output segment_index, word_index, row numbers, IDs, or counts.
-- Never add, omit, merge, duplicate, or reorder S/W lines.
-- Do not put TAB or newline characters inside translation, meaning, or phonetic fields.
+Critical structure rules:
+- NEVER output segment IDs or word IDs.
+- Output exactly one segments element for every input item, in the same order.
+- Inside each segment, output exactly one words element for every input word, in the same order.
+- Never add, omit, merge, split, or reorder segments or words.
+- Every translation and meaning must be a JSON string.
+- Every phonetic must be a JSON string.
 
 Translation rules:
-- Translate only the target sentence, using context only to resolve ambiguity.
-- Use concise natural Simplified Chinese suitable for Chinese students.
-- Preserve negation, names, numbers, dates, times, and factual information.
-- Each word meaning must be a standalone Chinese dictionary-style gloss for that exact occurrence and grammatical role.
-- Do not translate the whole sentence as a word meaning.
+- Translate only target_text into concise natural Simplified Chinese suitable for Chinese students.
+- Use context only to resolve ambiguity; never translate extra context.
+- Preserve meaning, negation, names, numbers, dates, times, and factual information.
+- For each word, return a concise Simplified Chinese dictionary-style meaning for that exact occurrence and grammatical role.
+- Do not return the whole sentence as a word meaning.
 - For every pronounceable English word, return General American English IPA with stress where appropriate.
 - Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
-- Use an empty final phonetic field only when the source is not pronounceable as an English word.
-
-Example for one segment containing two words:
-S\t它是什么颜色？
-W\t什么\twʌt
-W\t颜色\tˈkʌlər
+- Return an empty phonetic string only when the source is not pronounceable as an English word.
 """
 
-LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for children's English textbook translations.
+LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structured children's English textbook translations.
 
-Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, or reasoning.
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
 
-If everything is acceptable, return exactly:
-OK
-
-If there are errors, return one correction per line using the REAL TAB character U+0009. Do not write the literal text <TAB>.
-S\tsegment_index\ttranslation\tshort reason\tcorrected translation
-W\tsegment_index\tword_index\tmeaning\tshort reason\tcorrected meaning
-W\tsegment_index\tword_index\tphonetic\tshort reason\tcorrected General American IPA
+The input contains ordered candidate segments and ordered candidate words. Do NOT output any source IDs.
+Return exactly:
+{"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
 
 Rules:
-- Never output OK together with correction lines.
-- Use only supplied temporary zero-based indexes.
-- Do not output source/business IDs.
-- Do not put TAB or newline characters inside reason or suggestion fields.
+- Return {"issues":[]} when everything is acceptable.
+- segment_index is the zero-based position in the supplied segments array.
+- For sentence translation issues, word_index MUST be -1 and field MUST be "translation".
+- For word issues, word_index is the zero-based word position inside that segment and field MUST be "meaning" or "phonetic".
+- Never invent an index outside the supplied arrays.
 - Include only actual errors.
-- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and unsupported information.
-- Check every word meaning against that exact occurrence and grammatical role.
-- Check General American IPA, including stress, rhotic /r/, and American /oʊ/ where applicable.
+- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and information not present in the source.
+- Check that each word meaning is a standalone lexical gloss for that exact occurrence.
+- Check that phonetics are General American English IPA, including stress where appropriate, with rhotic /r/ and American /oʊ/ where applicable.
+- suggestion contains only the corrected value for the named field.
 """
+
+LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "translation": {"type": "string"},
+                    "words": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "meaning": {"type": "string"},
+                                "phonetic": {"type": "string"},
+                            },
+                            "required": ["meaning", "phonetic"],
+                        },
+                    },
+                },
+                "required": ["translation", "words"],
+            },
+        }
+    },
+    "required": ["segments"],
+}
+
+LOCAL_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "segment_index": {"type": "integer", "minimum": 0},
+                    "word_index": {"type": "integer", "minimum": -1},
+                    "field": {"type": "string", "enum": ["translation", "meaning", "phonetic"]},
+                    "reason": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+                "required": ["segment_index", "word_index", "field", "reason", "suggestion"],
+            },
+        }
+    },
+    "required": ["issues"],
+}
 
 SINGLE_REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -902,114 +951,87 @@ def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
 
 
 class LocalStructureError(ValueError):
-    """Local line protocol is structurally unusable."""
-
-
-def _protocol_clean_field(value: Any) -> str:
-    return " ".join(str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").split()).strip()
-
-
-def _normalize_protocol_line(value: str) -> str:
-    """Accept the three delimiter spellings small local models commonly emit.
-
-    Preferred output is a real U+0009 TAB. Qwen may occasionally copy the
-    human-readable placeholder <TAB> or the two characters \\t literally;
-    these are delimiter spelling variants, not content repair.
-    """
-    line = re.sub(r"(?i)<\s*TAB\s*>", "\t", value)
-    line = line.replace("\\t", "\t")
-    return line
+    """Local-model output is syntactically valid enough to inspect but structurally unusable."""
 
 
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
-    lines = [f"SEGMENT_COUNT\t{len(items)}"]
-    for item in items:
-        lines.append("SEGMENT")
-        lines.append("CONTEXT\t" + _protocol_clean_field(item["context"]))
-        lines.append("TEXT\t" + _protocol_clean_field(item["target_text"]))
-        lines.append(f"WORD_COUNT\t{len(item['words'])}")
-        for word in item["words"]:
-            lines.append(
-                "WORD\t"
-                + _protocol_clean_field(word["text"])
-                + "\t"
-                + _protocol_clean_field(word.get("phonetic", ""))
-            )
-        lines.append("END_SEGMENT")
-    return "\n".join(lines)
+    payload = {
+        "items": [
+            {
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "phonetic": word.get("phonetic", ""),
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ]
+    }
+    return (
+        "Translate the following ordered textbook data. "
+        "Do not output or reconstruct any source IDs. "
+        "Keep the number and order of segments and words exactly unchanged.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def parse_local_translation(
     value: Any,
     items: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        raise LocalStructureError("local translator returned empty protocol")
-
-    expected_rows: list[tuple[str, int, int | None]] = []
-    for segment_index, item in enumerate(items):
-        expected_rows.append(("S", segment_index, None))
-        for word_index in range(len(item["words"])):
-            expected_rows.append(("W", segment_index, word_index))
-
-    raw_lines = [
-        _normalize_protocol_line(raw_line.strip())
-        for raw_line in text.split("\n")
-        if raw_line.strip()
-    ]
-    if len(raw_lines) != len(expected_rows):
+    payload = json.loads(_clean_json_payload(value))
+    if not isinstance(payload, dict) or set(payload) != {"segments"}:
+        raise LocalStructureError("local translator response must contain only a segments array")
+    raw_segments = payload["segments"]
+    if not isinstance(raw_segments, list):
+        raise LocalStructureError("local translator segments must be an array")
+    if len(raw_segments) != len(items):
         raise LocalStructureError(
-            f"local translator row count mismatch: got {len(raw_lines)}, want {len(expected_rows)}"
+            f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
         )
 
-    sentence_results: dict[int, str] = {}
-    word_results: dict[tuple[int, int], dict[str, str]] = {}
-    for line_number, (line, expected) in enumerate(zip(raw_lines, expected_rows), 1):
-        expected_kind, segment_index, word_index = expected
-        parts = line.split("\t")
-        kind = parts[0].strip()
-        if kind != expected_kind:
-            raise LocalStructureError(
-                f"local translator row type mismatch at line {line_number}: "
-                f"got {kind or '<empty>'}, want {expected_kind}"
-            )
-
-        if expected_kind == "S":
-            if len(parts) != 2:
-                raise LocalStructureError(
-                    f"local translator invalid S line at {line_number}: got {len(parts)} fields, want 2"
-                )
-            translation = clean_translation(parts[1])
-            if not translation:
-                raise ValueError(
-                    f"local translator returned empty translation at segment {segment_index}"
-                )
-            sentence_results[segment_index] = translation
-            continue
-
-        if len(parts) != 3:
-            raise LocalStructureError(
-                f"local translator invalid W line at {line_number}: got {len(parts)} fields, want 3"
-            )
-        meaning = clean_translation(parts[1])
-        if not meaning:
-            raise ValueError(
-                f"local translator returned empty meaning at {segment_index}:{word_index}"
-            )
-        assert word_index is not None
-        word_results[(segment_index, word_index)] = {
-            "meaning": meaning,
-            "phonetic": clean_phonetic(parts[2]),
-        }
-
     result: dict[str, dict[str, Any]] = {}
-    for segment_index, item in enumerate(items):
+    for segment_index, (raw_segment, item) in enumerate(zip(raw_segments, items)):
+        if not isinstance(raw_segment, dict) or set(raw_segment) != {"translation", "words"}:
+            raise LocalStructureError(f"local translator segment {segment_index} has an invalid shape")
+        translation = clean_translation(raw_segment.get("translation", ""))
+        if not translation:
+            raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+        raw_words = raw_segment.get("words")
+        if not isinstance(raw_words, list):
+            raise LocalStructureError(f"local translator words must be an array at segment {segment_index}")
+        expected_words = item["words"]
+        if len(raw_words) != len(expected_words):
+            raise LocalStructureError(
+                f"local translator word count mismatch at segment {segment_index}: "
+                f"got {len(raw_words)}, want {len(expected_words)}"
+            )
         words: dict[str, dict[str, str]] = {}
-        for word_index, source_word in enumerate(item["words"]):
-            words[str(source_word["id"])] = word_results[(segment_index, word_index)]
+        for word_index, (raw_word, source_word) in enumerate(zip(raw_words, expected_words)):
+            if not isinstance(raw_word, dict) or set(raw_word) != {"meaning", "phonetic"}:
+                raise LocalStructureError(
+                    f"local translator word {segment_index}:{word_index} has an invalid shape"
+                )
+            meaning = clean_translation(raw_word.get("meaning", ""))
+            if not meaning:
+                raise ValueError(
+                    f"local translator returned empty meaning at {segment_index}:{word_index}"
+                )
+            phonetic_value = raw_word.get("phonetic")
+            if not isinstance(phonetic_value, str):
+                raise ValueError(
+                    f"local translator returned invalid phonetic at {segment_index}:{word_index}"
+                )
+            words[str(source_word["id"])] = {
+                "meaning": meaning,
+                "phonetic": clean_phonetic(phonetic_value),
+            }
         result[str(item["id"])] = {
-            "translation": sentence_results[segment_index],
+            "translation": translation,
             "words": words,
         }
     return result
@@ -1019,28 +1041,30 @@ def local_review_prompt(
     items: list[dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
 ) -> str:
-    lines = [f"SEGMENT_COUNT\t{len(items)}"]
-    for segment_index, item in enumerate(items):
-        candidate = candidates[item["id"]]
-        lines.append(f"SEGMENT\t{segment_index}")
-        lines.append("CONTEXT\t" + _protocol_clean_field(item["context"]))
-        lines.append("TEXT\t" + _protocol_clean_field(item["target_text"]))
-        lines.append("CANDIDATE_TRANSLATION\t" + _protocol_clean_field(candidate["translation"]))
-        lines.append(f"WORD_COUNT\t{len(item['words'])}")
-        for word_index, word in enumerate(item["words"]):
-            word_candidate = candidate["words"][word["id"]]
-            lines.append(
-                "WORD\t"
-                + str(word_index)
-                + "\t"
-                + _protocol_clean_field(word["text"])
-                + "\t"
-                + _protocol_clean_field(word_candidate["meaning"])
-                + "\t"
-                + _protocol_clean_field(word_candidate["phonetic"])
-            )
-        lines.append("END_SEGMENT")
-    return "\n".join(lines)
+    payload = {
+        "segments": [
+            {
+                "context": item["context"],
+                "target_text": item["target_text"],
+                "candidate_translation": candidates[item["id"]]["translation"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "candidate_meaning": candidates[item["id"]]["words"][word["id"]]["meaning"],
+                        "candidate_phonetic": candidates[item["id"]]["words"][word["id"]]["phonetic"],
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ]
+    }
+    return (
+        "Review the following ordered textbook translation candidates. "
+        "Refer to items only by zero-based segment_index and word_index. "
+        "Do not output or reconstruct source IDs.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def parse_local_review(
@@ -1048,93 +1072,85 @@ def parse_local_review(
     items: list[dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        raise LocalStructureError("local reviewer returned empty protocol")
-    if text == "OK":
-        return fallback_review(candidates)
-    if any(line.strip() == "OK" for line in text.split("\n")):
-        raise LocalStructureError("local reviewer mixed OK with correction lines")
+    payload = json.loads(_clean_json_payload(value))
+    if not isinstance(payload, dict) or set(payload) != {"issues"}:
+        raise LocalStructureError("local reviewer response must contain only an issues array")
+    issues = payload["issues"]
+    if not isinstance(issues, list):
+        raise LocalStructureError("local reviewer issues must be an array")
 
     result = fallback_review(candidates)
     seen: set[tuple[int, int, str]] = set()
-    for line_number, raw_line in enumerate(text.split("\n"), 1):
-        line = _normalize_protocol_line(raw_line.strip())
-        if not line:
-            continue
-        parts = line.split("\t")
-        kind = parts[0].strip()
-        if kind == "S":
-            if len(parts) != 5:
-                raise LocalStructureError(f"local reviewer invalid S line at {line_number}")
-            try:
-                segment_index = int(parts[1])
-            except ValueError as exc:
-                raise LocalStructureError(f"local reviewer invalid segment index at line {line_number}") from exc
-            if segment_index < 0 or segment_index >= len(items):
-                raise LocalStructureError(f"local reviewer segment index out of range: {segment_index}")
-            field = parts[2].strip()
-            reason = _protocol_clean_field(parts[3])
-            suggestion = clean_translation(parts[4])
-            if field != "translation" or not reason or not suggestion:
-                raise ValueError("local reviewer invalid sentence correction")
-            key = (segment_index, -1, field)
-            if key in seen:
-                raise LocalStructureError("local reviewer duplicate sentence correction")
-            seen.add(key)
-            segment_id = str(items[segment_index]["id"])
-            result[segment_id]["translation"] = suggestion
+    for raw in issues:
+        required = {"segment_index", "word_index", "field", "reason", "suggestion"}
+        if not isinstance(raw, dict) or set(raw) != required:
+            raise LocalStructureError("local reviewer issue has an invalid shape")
+        segment_index = raw["segment_index"]
+        word_index = raw["word_index"]
+        field = str(raw["field"]).strip()
+        reason = str(raw["reason"]).strip()
+        suggestion = str(raw["suggestion"]).strip()
+        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
+            raise LocalStructureError("local reviewer segment_index must be an integer")
+        if not isinstance(word_index, int) or isinstance(word_index, bool):
+            raise LocalStructureError("local reviewer word_index must be an integer")
+        if segment_index < 0 or segment_index >= len(items):
+            raise LocalStructureError(f"local reviewer segment_index out of range: {segment_index}")
+        if field not in {"translation", "meaning", "phonetic"} or not reason:
+            raise ValueError("local reviewer issue has an invalid field or reason")
+
+        item = items[segment_index]
+        segment_id = str(item["id"])
+        if field == "translation":
+            if word_index != -1:
+                raise LocalStructureError("local sentence translation issue must use word_index=-1")
+            correction = clean_translation(suggestion)
+            if not correction:
+                raise ValueError("local sentence translation correction must not be empty")
+            result[segment_id]["translation"] = correction
             result[segment_id]["issues"].append(reason)
             result[segment_id]["passed"] = False
-            continue
-        if kind == "W":
-            if len(parts) != 6:
-                raise LocalStructureError(f"local reviewer invalid W line at {line_number}")
-            try:
-                segment_index = int(parts[1])
-                word_index = int(parts[2])
-            except ValueError as exc:
-                raise LocalStructureError(f"local reviewer invalid word index at line {line_number}") from exc
-            if segment_index < 0 or segment_index >= len(items):
-                raise LocalStructureError(f"local reviewer segment index out of range: {segment_index}")
-            if word_index < 0 or word_index >= len(items[segment_index]["words"]):
+        else:
+            if word_index < 0 or word_index >= len(item["words"]):
                 raise LocalStructureError(
-                    f"local reviewer word index out of range: {segment_index}:{word_index}"
+                    f"local reviewer word_index out of range: {segment_index}:{word_index}"
                 )
-            field = parts[3].strip()
-            reason = _protocol_clean_field(parts[4])
-            suggestion_raw = parts[5]
-            if field not in {"meaning", "phonetic"} or not reason:
-                raise ValueError("local reviewer invalid word correction")
-            key = (segment_index, word_index, field)
-            if key in seen:
-                raise LocalStructureError("local reviewer duplicate word correction")
-            seen.add(key)
-            segment_id = str(items[segment_index]["id"])
-            word_id = str(items[segment_index]["words"][word_index]["id"])
+            word_id = str(item["words"][word_index]["id"])
             word_result = result[segment_id]["words"][word_id]
             if field == "meaning":
-                suggestion = clean_translation(suggestion_raw)
-                if not suggestion:
-                    raise ValueError("local reviewer empty meaning correction")
-                word_result["meaning"] = suggestion
+                correction = clean_translation(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local word meaning correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["meaning"] = correction
             else:
-                suggestion = clean_phonetic(suggestion_raw)
-                if not suggestion:
-                    raise ValueError("local reviewer empty phonetic correction")
-                word_result["phonetic"] = suggestion
+                correction = clean_phonetic(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local phonetic correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["phonetic"] = correction
             word_result["issues"].append(reason)
             result[segment_id]["passed"] = False
-            continue
-        raise LocalStructureError(f"local reviewer unexpected protocol line at {line_number}: {kind}")
+
+        issue_key = (segment_index, word_index, field)
+        if issue_key in seen:
+            raise LocalStructureError("local reviewer returned a duplicate issue")
+        seen.add(issue_key)
     return result
 
 
 def _is_local_retryable_structure_error(exc: Exception) -> bool:
-    return isinstance(exc, (CompletionTruncated, LocalStructureError))
+    # Local inference may regenerate the same whole-page request once when the
+    # output itself is malformed/truncated. Semantic/count mismatches remain
+    # hard failures so we never guess how to realign textbook content.
+    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated, LocalStructureError)):
+        return True
+    return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
 
 
-def _local_protocol_call(
+def _local_structured_call(
     backend: LocalMLXBackend,
     system_prompt: str,
     prompt: str,
@@ -1142,9 +1158,10 @@ def _local_protocol_call(
     kind: str,
     page: int | str | None,
     parser: Any,
+    schema: dict[str, Any],
     max_completion_tokens: int,
 ) -> Any:
-    """Run one local whole-page line-protocol request and regenerate once."""
+    """Run one local whole-page request and regenerate malformed JSON once."""
     last_error: Exception | None = None
     for attempt in (1, 2):
         raw: str | None = None
@@ -1153,18 +1170,18 @@ def _local_protocol_call(
             retry_instruction = ""
             if attempt == 2:
                 retry_instruction = (
-                    "\n\nPREVIOUS OUTPUT VIOLATED THE LINE PROTOCOL. "
-                    "Regenerate the entire same request from scratch. "
-                    "Return ONLY the exact S/W protocol required by the system prompt "
-                    "(or OK for reviewer). Do not output JSON, Markdown, or explanations. "
-                    "Preserve the required row count and order exactly."
+                    "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
+                    "Regenerate the entire same request from scratch. Return ONLY one "
+                    "complete JSON object. Keep every array length and position exactly "
+                    "the same as the input. Do not output IDs."
                 )
-            # IMPORTANT: local protocol bypasses generate_structured entirely.
-            # The model produces plain text; only the cloud path uses JSON Schema.
-            raw = backend.generate(
+            raw = _generate_once(
+                backend,
                 system_prompt + retry_instruction,
                 prompt,
                 max_completion_tokens,
+                schema_name=kind,
+                schema=schema,
             )
             return parser(raw)
         except Exception as exc:
@@ -1184,7 +1201,7 @@ def _local_protocol_call(
                     json.dumps(
                         {
                             "event": "status",
-                            "message": "本地模型行协议输出无效，正在整页重生成一次",
+                            "message": "本地模型结构化输出无效，正在仅重生成本页一次",
                         },
                         ensure_ascii=False,
                     ),
@@ -1192,7 +1209,7 @@ def _local_protocol_call(
                 )
                 continue
             raise
-    raise last_error or RuntimeError("local protocol generation failed")
+    raise last_error or RuntimeError("local structured generation failed")
 
 
 def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
@@ -1695,19 +1712,20 @@ def local_translate_candidates(
         json.dumps(
             {
                 "event": "status",
-                "message": f"本地整页翻译：{len(items)} 个片段，{word_count} 个单词；模型只返回 S/W 内容行，程序按输入顺序绑定 OCR ID",
+                "message": f"本地整页翻译：{len(items)} 个片段，{word_count} 个单词；结果按输入位置绑定，不由模型生成 ID",
             },
             ensure_ascii=False,
         ),
         flush=True,
     )
-    candidates = _local_protocol_call(
+    candidates = _local_structured_call(
         backend,
         LOCAL_TRANSLATOR_SYSTEM_PROMPT,
         local_translation_prompt(items),
         kind="page_translation",
         page=page,
         parser=lambda raw: parse_local_translation(raw, items),
+        schema=LOCAL_TRANSLATION_SCHEMA,
         max_completion_tokens=min(
             max_completion_tokens,
             max(2048, 768 + word_count * 112 + len(items) * 192),
@@ -1727,13 +1745,14 @@ def local_review_candidates(
     page: int | str | None,
 ) -> tuple[dict[str, dict[str, Any]], bool]:
     try:
-        reviewed = _local_protocol_call(
+        reviewed = _local_structured_call(
             backend,
             LOCAL_REVIEWER_SYSTEM_PROMPT,
             local_review_prompt(items, candidates),
             kind="page_review",
             page=page,
             parser=lambda raw: parse_local_review(raw, items, candidates),
+            schema=LOCAL_REVIEW_SCHEMA,
             max_completion_tokens=max(
                 1024,
                 256 + sum(len(item["words"]) for item in items) * 40 + len(items) * 64,
