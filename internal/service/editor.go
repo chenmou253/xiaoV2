@@ -66,7 +66,10 @@ func NewEditorService(db *gorm.DB, cfg config.Config, r *resource.Manager) *Edit
 	return &EditorService{db: db, cfg: cfg, resources: r}
 }
 
-const daemonInactivityTimeout = 15 * time.Minute
+const (
+	daemonInactivityTimeout   = 15 * time.Minute
+	daemonGracefulStopTimeout = 10 * time.Second
+)
 
 type daemonScanResult struct {
 	line []byte
@@ -1959,13 +1962,37 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 	}
 }
 
+func stopResidentDaemonProcess(cmd *exec.Cmd, in io.WriteCloser) {
+	if in != nil {
+		// Both translation_daemon.py and generate_audio.py --daemon iterate
+		// over stdin. Closing it lets Python leave the loop normally and run
+		// MLX/multiprocessing cleanup instead of being SIGKILLed immediately.
+		_ = in.Close()
+	}
+	if cmd == nil || cmd.Process == nil || cmd.ProcessState != nil {
+		return
+	}
+	done := make(chan struct{}, 1)
+	go func() {
+		_ = cmd.Wait()
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(daemonGracefulStopTimeout):
+		_ = cmd.Process.Kill()
+	}
+	// Always reap a force-killed child too. Do not leave a zombie or stale
+	// multiprocessing resource tracker behind for the next MLX model load.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+}
+
 func (s *EditorService) stopAudioDaemonLocked() {
-	if s.audioIn != nil {
-		_ = s.audioIn.Close()
-	}
-	if s.audioCmd != nil && s.audioCmd.Process != nil {
-		_ = s.audioCmd.Process.Kill()
-	}
+	stopResidentDaemonProcess(s.audioCmd, s.audioIn)
 	s.audioCmd, s.audioIn, s.audioOut = nil, nil, nil
 	s.audioDaemonModel = ""
 }
@@ -2163,12 +2190,7 @@ func (s *EditorService) runTranslationDaemon(ctx context.Context, job *model.Tex
 }
 
 func (s *EditorService) stopTranslationDaemonLocked() {
-	if s.translationIn != nil {
-		_ = s.translationIn.Close()
-	}
-	if s.translationCmd != nil && s.translationCmd.Process != nil {
-		_ = s.translationCmd.Process.Kill()
-	}
+	stopResidentDaemonProcess(s.translationCmd, s.translationIn)
 	s.translationCmd, s.translationIn, s.translationOut = nil, nil, nil
 	s.translationDaemonModel = ""
 }
