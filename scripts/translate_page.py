@@ -23,6 +23,8 @@ from typing import Any, Callable, Protocol
 
 
 MAX_TRANSLATION_COMPLETION_TOKENS = 131072
+LOCAL_BATCH_MAX_SEGMENTS = 4
+LOCAL_BATCH_MAX_WORDS = 20
 
 
 def configured_translation_completion_tokens() -> int:
@@ -409,6 +411,7 @@ class LocalMLXBackend:
     def __init__(self, model_repo: str | None = None) -> None:
         try:
             from mlx_lm import generate, load
+            from mlx_lm.sample_utils import make_sampler
         except ImportError as exc:
             raise RuntimeError(
                 "mlx-lm is unavailable; install requirements-translate.txt"
@@ -449,6 +452,9 @@ class LocalMLXBackend:
                 load_target = self.model_repo
         self._model, self._tokenizer = load(load_target)
         self._generate_fn = generate
+        # Translation is a deterministic data-processing task. Greedy sampling
+        # reduces JSON/ID drift compared with creative temperature sampling.
+        self._sampler = make_sampler(temp=0.0)
         print(
             "[TRANSLATION LOCAL HEALTH] "
             f"model={self.model_repo} load_target={load_target} load_seconds={time.monotonic() - started:.3f}",
@@ -510,6 +516,7 @@ class LocalMLXBackend:
             self._tokenizer,
             prompt=prompt,
             max_tokens=token_limit,
+            sampler=self._sampler,
         )
         if not isinstance(result, str) or not result.strip():
             raise ValueError("local translation model returned empty content")
@@ -781,7 +788,7 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
 
 def batch_translation_prompt(items: list[dict[str, Any]]) -> str:
     return (
-        "Translate this entire textbook page. Each item has its own context; do not translate context. "
+        "Translate every supplied textbook-page item. Each item has its own context; do not translate context. "
         "Translate target_text as a sentence and each word only in its target sentence. Return General American English IPA for every word, even when the input phonetic is blank. Use rhotic American pronunciation, not British IPA. Existing phonetics are reference values only and must be preserved by the application.\n\n"
         "PAGE ITEMS:\n"
         + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
@@ -791,7 +798,7 @@ def batch_translation_prompt(items: list[dict[str, Any]]) -> str:
 
 def batch_review_prompt(items: list[dict[str, Any]]) -> str:
     return (
-        "Review every candidate in this entire textbook page. Use each item's context only for disambiguation. "
+        "Review every supplied textbook-page candidate. Use each item's context only for disambiguation. "
         "Correct omissions, additions, mistranslations, names, numbers, negation, and word polysemy.\n\n"
         "PAGE CANDIDATES:\n"
         + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
@@ -1181,6 +1188,8 @@ def log_failure(
     page: int | str | None = None,
     model: str = "",
     raw: str | None = None,
+    batch_index: int | None = None,
+    batch_total: int | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "request_type": kind,
@@ -1194,10 +1203,19 @@ def log_failure(
     }
     if raw is not None:
         payload["response_length"] = len(raw)
+    if batch_index is not None:
+        payload["batch"] = batch_index
+    if batch_total is not None:
+        payload["batch_total"] = batch_total
     if isinstance(error, json.JSONDecodeError):
         payload.update({"line": error.lineno, "column": error.colno, "position": error.pos})
     if raw is not None and os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
         payload["response_preview"] = raw[:1200]
+        if isinstance(error, json.JSONDecodeError):
+            start = max(0, error.pos - 240)
+            end = min(len(raw), error.pos + 240)
+            payload["response_error_context_start"] = start
+            payload["response_error_context"] = raw[start:end]
     print(
         "[TRANSLATION WARNING]",
         json.dumps(payload, ensure_ascii=False),
