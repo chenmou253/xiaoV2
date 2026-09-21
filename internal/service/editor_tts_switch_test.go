@@ -31,3 +31,23 @@ func TestReleaseAudioDaemonForModelSwitchKeepsSameModel(t *testing.T) {
 		t.Fatalf("same-model selection should keep resident daemon model, got %q", s.audioDaemonModel)
 	}
 }
+
+
+func TestReleaseTranslationDaemonForModelSwitchClearsIdleModel(t *testing.T) {
+	s := &EditorService{translationDaemonModel: "local-qwen3-4b-instruct-2507"}
+	if err := s.ReleaseTranslationDaemonForModelSwitch("local-qwen3-4b-instruct-2507", "qwen3.7-flash"); err != nil {
+		t.Fatalf("ReleaseTranslationDaemonForModelSwitch: %v", err)
+	}
+	if s.translationDaemonModel != "" {
+		t.Fatalf("translationDaemonModel = %q, want empty", s.translationDaemonModel)
+	}
+}
+
+func TestReleaseTranslationDaemonForModelSwitchRejectsActiveTranslation(t *testing.T) {
+	s := &EditorService{translationDaemonModel: "local-qwen3-4b-instruct-2507"}
+	s.translationMu.Lock()
+	defer s.translationMu.Unlock()
+	if err := s.ReleaseTranslationDaemonForModelSwitch("local-qwen3-4b-instruct-2507", "qwen3.7-flash"); err == nil {
+		t.Fatal("expected active translation to block model switch")
+	}
+}
