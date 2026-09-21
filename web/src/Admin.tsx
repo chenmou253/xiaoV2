@@ -307,6 +307,7 @@ function SiteSettings({
       });
   }, [settings?.tts_model]);
   const ocrModels = models.filter((model) => model.type === "ocr" && model.enabled);
+  const translationModels = models.filter((model) => model.type === "translation" && model.enabled);
   const ttsModels = models.filter((model) => model.type === "tts" && model.enabled);
   return (
     <section className="admin-panel">
@@ -329,6 +330,16 @@ function SiteSettings({
             OCR 模型
             <select value={settings.ocr_model} disabled={!writable} onChange={(event) => setSettings({ ...settings, ocr_model: event.target.value })}>
               {ocrModels.map((model) => (
+                <option key={model.id} value={model.id} disabled={!model.available}>
+                  {model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            翻译模型
+            <select value={settings.translation_model} disabled={!writable} onChange={(event) => setSettings({ ...settings, translation_model: event.target.value })}>
+              {translationModels.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}
                 </option>
@@ -950,6 +961,7 @@ function Drafts({
     if (!detail?.draft?.id) return;
     setDraftModelSettings({
       ocr_model: detail.draft.ocr_model || "local-paddleocr",
+      translation_model: detail.draft.translation_model || "qwen3.7-flash",
       tts_model: detail.draft.tts_model || "local-qwen3-tts",
       tts_voice: detail.draft.tts_voice || "aiden",
     });
@@ -1114,11 +1126,14 @@ function Drafts({
     if (!detail || !draftModelSettings || processing || !editableDraft) return;
     const draft = detail.draft;
     const ttsChanged = draft.tts_model !== draftModelSettings.tts_model || draft.tts_voice !== draftModelSettings.tts_voice;
+    const translationChanged = draft.translation_model !== draftModelSettings.translation_model;
     const ocrChanged = draft.ocr_model !== draftModelSettings.ocr_model;
-    if (!ttsChanged && !ocrChanged) return;
+    if (!ttsChanged && !translationChanged && !ocrChanged) return;
     const impact = ttsChanged
       ? "未完成页面的旧音频与 QA 结果会清除，并改为使用新 TTS 重新生成；已完整确认的页面不会变。"
-      : "仅影响后续 OCR 或你主动重新 OCR 的页面；已确认页面不会变。";
+      : translationChanged
+        ? "只更新文字尚未确认页面和后续页面的翻译模型；已确认文字的页面保留原翻译结果与模型。"
+        : "仅影响后续 OCR 或你主动重新 OCR 的页面；已确认页面不会变。";
     if (!confirm(`确定切换此草稿的默认模型吗？\n${impact}`)) return;
     await run(async () => {
       await api(`/admin/drafts/${id}/models`, {
@@ -1603,15 +1618,16 @@ function Drafts({
             )}
           </p>
           <p className="admin-note">
-            OCR：{detail.draft.ocr_model || "local-paddleocr"} · TTS：{detail.draft.tts_model || "local-qwen3-tts"}
+            OCR：{detail.draft.ocr_model || "local-paddleocr"} · 翻译：{detail.draft.translation_model || "qwen3.7-flash"} · TTS：{detail.draft.tts_model || "local-qwen3-tts"}
             {detail.draft.tts_voice ? ` · 音色 ${detail.draft.tts_voice}` : ""}
           </p>
           {draftModelSettings && <form className="draft-model-switcher" onSubmit={(event) => { event.preventDefault(); void switchDraftModels(); }}>
             <label>后续 OCR 默认模型<select value={draftModelSettings.ocr_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, ocr_model: event.target.value })}>{draftModels.filter((model) => model.type === "ocr" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
+            <label>后续翻译默认模型<select value={draftModelSettings.translation_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, translation_model: event.target.value })}>{draftModels.filter((model) => model.type === "translation" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
             <label>后续 TTS 默认模型<select value={draftModelSettings.tts_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => { const model = draftModels.find((item) => item.id === event.target.value); setDraftModelSettings({ ...draftModelSettings, tts_model: event.target.value, tts_voice: model?.default_voice || "" }); }}>{draftModels.filter((model) => model.type === "tts" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
             <label>线上 TTS 音色<select value={draftModelSettings.tts_voice} disabled={!can("content.write") || !editableDraft || processing || draftVoices.length === 0} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, tts_voice: event.target.value })}>{draftVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.display_name}</option>)}</select></label>
             <button className="admin-primary" disabled={!can("content.write") || !editableDraft || processing}>应用到未锁定页面</button>
-            <small>已完成 OCR 与音频确认的页面会锁定原模型、文本和音频；切换 TTS 只清理未锁定页面的临时音频。</small>
+            <small>文字已确认的页面锁定原翻译模型；全部确认页面锁定原 OCR/TTS。切换翻译模型只影响文字未确认页和后续页，切换 TTS 只清理未完成页面的临时音频。</small>
           </form>}
           <div className="page-workflow">
             <strong>
@@ -1620,8 +1636,8 @@ function Drafts({
                 : sourcePageCount && lastPage >= sourcePageCount
                   ? "全部页面已生成"
                 : audioRequired
-                  ? "当前页面需按 OCR、音频顺序审核"
-                  : "当前页面只需审核 OCR（发音已关闭）"}
+                  ? "文字审核与音频阶段已解耦"
+                  : "当前页面只需完成文字审核（发音已关闭）"}
             </strong>
             <span>
               {lastPage
@@ -1855,7 +1871,7 @@ function Drafts({
                           ? "✓ 全部完成"
                           : "✓ 文字已确认 · 音频待处理"}
                     </button>
-                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
+                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.translation_model || detail.draft.translation_model || "qwen3.7-flash"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
                   </div>
                 ))}
               </aside>
