@@ -114,6 +114,7 @@ type TextbookDraft struct {
 	BritishVoiceID     string `gorm:"size:80;not null;default:'ryan'" json:"british_voice_id"`
 	AudioConfigVersion uint64 `gorm:"not null;default:1" json:"audio_config_version"`
 	OCRModel           string `gorm:"size:64;not null;default:'local-paddleocr'" json:"ocr_model"`
+	TranslationModel   string `gorm:"size:96;not null;default:'qwen3.7-flash'" json:"translation_model"`
 	TTSModel           string `gorm:"size:64;not null;default:'local-qwen3-tts'" json:"tts_model"`
 	TTSVoice           string `gorm:"size:100;not null;default:'aiden'" json:"tts_voice"`
 	// SourcePageCount is the number of pages in the uploaded PDF.  It keeps
@@ -141,8 +142,9 @@ type TextbookDraftPage struct {
 	AudioChecked bool   `gorm:"not null;default:false" json:"audio_checked"`
 	// Model fields are page snapshots. A fully reviewed page keeps these values
 	// even when the draft default changes for later/unreviewed pages.
-	OCRModel  string    `gorm:"size:64;not null;default:''" json:"ocr_model"`
-	TTSModel  string    `gorm:"size:64;not null;default:''" json:"tts_model"`
+	OCRModel         string    `gorm:"size:64;not null;default:''" json:"ocr_model"`
+	TranslationModel string    `gorm:"size:96;not null;default:''" json:"translation_model"`
+	TTSModel         string    `gorm:"size:64;not null;default:''" json:"tts_model"`
 	TTSVoice  string    `gorm:"size:100;not null;default:''" json:"tts_voice"`
 	Version   uint64    `gorm:"not null;default:1" json:"version"`
 	UpdatedAt time.Time `json:"updated_at"`
