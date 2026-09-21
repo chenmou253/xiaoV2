@@ -121,9 +121,9 @@ LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic translation engine f
 
 Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, or reasoning.
 
-Output protocol:
-S<TAB>segment_index<TAB>Chinese sentence translation
-W<TAB>segment_index<TAB>word_index<TAB>Chinese word meaning<TAB>General American IPA
+Output protocol uses the REAL TAB character U+0009 between fields. Do not write the literal text <TAB>.
+S\tsegment_index\tChinese sentence translation
+W\tsegment_index\tword_index\tChinese word meaning\tGeneral American IPA
 
 Rules:
 - Output exactly one S line for every supplied SEGMENT.
@@ -141,10 +141,10 @@ Rules:
 - Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
 - Use an empty final phonetic field only when the source is not pronounceable as an English word.
 
-Example:
-S<TAB>0<TAB>它是什么颜色？
-W<TAB>0<TAB>0<TAB>什么<TAB>wʌt
-W<TAB>0<TAB>1<TAB>颜色<TAB>ˈkʌlər
+Example (the separators shown below are real U+0009 TAB characters):
+S\t0\t它是什么颜色？
+W\t0\t0\t什么\twʌt
+W\t0\t1\t颜色\tˈkʌlər
 """
 
 LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for children's English textbook translations.
@@ -154,10 +154,10 @@ Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, ex
 If everything is acceptable, return exactly:
 OK
 
-If there are errors, return one correction per line:
-S<TAB>segment_index<TAB>translation<TAB>short reason<TAB>corrected translation
-W<TAB>segment_index<TAB>word_index<TAB>meaning<TAB>short reason<TAB>corrected meaning
-W<TAB>segment_index<TAB>word_index<TAB>phonetic<TAB>short reason<TAB>corrected General American IPA
+If there are errors, return one correction per line using the REAL TAB character U+0009. Do not write the literal text <TAB>.
+S\tsegment_index\ttranslation\tshort reason\tcorrected translation
+W\tsegment_index\tword_index\tmeaning\tshort reason\tcorrected meaning
+W\tsegment_index\tword_index\tphonetic\tshort reason\tcorrected General American IPA
 
 Rules:
 - Never output OK together with correction lines.
@@ -907,6 +907,18 @@ def _protocol_clean_field(value: Any) -> str:
     return " ".join(str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").split()).strip()
 
 
+def _normalize_protocol_line(value: str) -> str:
+    """Accept the three delimiter spellings small local models commonly emit.
+
+    Preferred output is a real U+0009 TAB. Qwen may occasionally copy the
+    human-readable placeholder <TAB> or the two characters \\t literally;
+    these are delimiter spelling variants, not content repair.
+    """
+    line = re.sub(r"(?i)<\s*TAB\s*>", "\t", value)
+    line = line.replace("\\t", "\t")
+    return line
+
+
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     lines = [
         f"SEGMENT_COUNT\t{len(items)}",
@@ -934,7 +946,7 @@ def parse_local_translation(
     sentence_results: dict[int, str] = {}
     word_results: dict[tuple[int, int], dict[str, str]] = {}
     for line_number, raw_line in enumerate(text.split("\n"), 1):
-        line = raw_line.strip()
+        line = _normalize_protocol_line(raw_line.strip())
         if not line:
             continue
         parts = line.split("\t")
@@ -1062,7 +1074,7 @@ def parse_local_review(
     result = fallback_review(candidates)
     seen: set[tuple[int, int, str]] = set()
     for line_number, raw_line in enumerate(text.split("\n"), 1):
-        line = raw_line.strip()
+        line = _normalize_protocol_line(raw_line.strip())
         if not line:
             continue
         parts = line.split("\t")
