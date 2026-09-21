@@ -1712,50 +1712,23 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
 
     print(json.dumps({"event": "progress", "stage": "translator", "progress": 0, "total": 2}), flush=True)
     if isinstance(backend, LocalMLXBackend):
-        candidates, missing = _batch_generate(
+        candidates = local_translate_candidates(
             backend,
-            BATCH_TRANSLATOR_SYSTEM_PROMPT,
-            batch_translation_prompt(items),
-            kind="page_translation",
-            stage_label="整页翻译",
-            parser=lambda raw: parse_batch_translation_partial(raw, expected),
-            schema=BATCH_TRANSLATION_SCHEMA,
+            items,
+            expected,
             page=page_number,
             max_completion_tokens=translation_token_budget,
         )
-        if missing:
-            supplement_items, supplement_expected = missing_translation_items(items, missing)
-            print(
-                json.dumps(
-                    {
-                        "event": "status",
-                        "message": f"本地翻译漏掉 {sum(len(ids) for ids in missing.values())} 个单词，正在只补齐缺失项",
-                    },
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
-            supplement = _batch_generate(
-                backend,
-                BATCH_TRANSLATOR_SYSTEM_PROMPT,
-                batch_translation_prompt(supplement_items),
-                kind="page_translation",
-                stage_label="本地漏词补齐",
-                parser=lambda raw: parse_batch_translation(raw, supplement_expected),
-                schema=BATCH_TRANSLATION_SCHEMA,
-                page=page_number,
-                max_completion_tokens=min(
-                    translation_token_budget,
-                    max(1024, 256 + sum(len(ids) for ids in missing.values()) * 96),
-                ),
-            )
-            candidates = merge_translation_supplement(candidates, supplement)
-        # The supplement is strict; reaching this point means every supplied
-        # OCR word ID is present exactly once.
-        for segment_id, word_ids in expected.items():
-            if segment_id not in candidates or set(candidates[segment_id]["words"]) != word_ids:
-                raise ValueError(f"batch translator word IDs do not match segment {segment_id}")
+        print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
+        reviewed, review_failed = local_review_candidates(
+            backend,
+            items,
+            candidates,
+            page=page_number,
+        )
     else:
+        # Cloud policy stays intentionally strict: one page translation call,
+        # one page review call, no automatic retries or model fallback.
         candidates = _batch_generate(
             backend,
             BATCH_TRANSLATOR_SYSTEM_PROMPT,
@@ -1767,78 +1740,42 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
             page=page_number,
             max_completion_tokens=translation_token_budget,
         )
-    print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
-    review_items = []
-    for item in items:
-        candidate = candidates[item["id"]]
-        review_items.append(
-            {
-                "id": item["id"],
-                "context": item["context"],
-                "target_text": item["target_text"],
-                "candidate_translation": candidate["translation"],
-                "words": [
+        print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
+        review_items = build_review_items(items, candidates)
+        review_failed = False
+        try:
+            reviewed = _batch_generate(
+                backend,
+                BATCH_REVIEWER_SYSTEM_PROMPT,
+                batch_review_prompt(review_items),
+                kind="page_review",
+                stage_label="整页审核",
+                parser=lambda raw: parse_batch_review(raw, candidates, expected),
+                schema=BATCH_REVIEW_SCHEMA,
+                page=page_number,
+                max_completion_tokens=review_token_budget,
+            )
+        except Exception as exc:
+            # A successful cloud translation is retained when only the review
+            # response fails. There is still no retry and no automatic fallback.
+            review_failed = True
+            reviewed = fallback_review(candidates)
+            print(
+                "[TRANSLATION REVIEW WARNING]",
+                json.dumps(
                     {
-                        "id": word["id"],
-                        "text": word["text"],
-                        "candidate_meaning": candidate["words"][word["id"]]["meaning"],
-                        "candidate_phonetic": candidate["words"][word["id"]]["phonetic"],
-                    }
-                    for word in item["words"]
-                ],
-            }
-        )
-    review_failed = False
-    try:
-        reviewed = _batch_generate(
-            backend,
-            BATCH_REVIEWER_SYSTEM_PROMPT,
-            batch_review_prompt(review_items),
-            kind="page_review",
-            stage_label="整页审核",
-            parser=lambda raw: parse_batch_review(raw, candidates, expected),
-            schema=BATCH_REVIEW_SCHEMA,
-            page=page_number,
-            max_completion_tokens=review_token_budget,
-        )
-    except Exception as exc:
-        # Review only improves quality; a completed translation remains usable
-        # if every review attempt fails. Keep translator candidates untouched.
-        review_failed = True
-        reviewed = {
-            segment_id: {
-                "translation": candidate["translation"],
-                "issues": [],
-                "passed": True,
-                "score": None,
-                "words": {
-                    word_id: {
-                        "meaning": word["meaning"],
-                        "phonetic": word["phonetic"],
-                        "issues": [],
-                        "score": None,
-                    }
-                    for word_id, word in candidate["words"].items()
-                },
-            }
-            for segment_id, candidate in candidates.items()
-        }
-        print(
-            "[TRANSLATION REVIEW WARNING]",
-            json.dumps(
-                {
-                    "request_type": "page_review",
-                    "page": page_number,
-                    "model": getattr(backend, "model", ""),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:800],
-                    "fallback": "kept_page_translation",
-                },
-                ensure_ascii=False,
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+                        "request_type": "page_review",
+                        "page": page_number,
+                        "model": getattr(backend, "model", ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                        "fallback": "kept_page_translation",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
     print(json.dumps({"event": "progress", "stage": "done", "progress": 2, "total": 2}), flush=True)
 
     # Coordinates, OCR confidence, IDs, images, and audio metadata are never
