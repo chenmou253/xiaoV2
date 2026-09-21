@@ -882,6 +882,14 @@ func (s *EditorService) Reorder(ctx context.Context, id string, positions []int,
 		return editorAudit(tx, actor, "draft.reorder", id, positions)
 	})
 }
+func pageTextReviewIssues(raw string) []string {
+	var content map[string]any
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return []string{"页面 JSON 无效"}
+	}
+	return publicationIssues(content)
+}
+
 func pageAudioRegenerationIssues(raw string) []string {
 	var content map[string]any
 	if err := json.Unmarshal([]byte(raw), &content); err != nil {
@@ -906,7 +914,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 		if d.Version != version {
 			return conflict("草稿已更新，请刷新")
 		}
-		allowed := map[string][]string{"submit": {"draft"}, "approve": {"in_review"}, "reject": {"in_review", "approved"}, "withdraw": {"in_review", "approved"}, "publish": {"approved"}, "retry": {"failed"}, "translate": {"draft"}, "audio": {"draft"}, "audio-replace-page": {"draft", "failed"}, "audio-missing": {"draft"}, "audio-regenerate-us": {"draft"}, "audio-regenerate-uk": {"draft"}, "audio-retry-failed": {"draft"}, "next-page": {"draft"}, "reocr": {"draft", "failed"}}
+		allowed := map[string][]string{"submit": {"draft"}, "approve": {"in_review"}, "reject": {"in_review", "approved"}, "withdraw": {"in_review", "approved"}, "publish": {"approved"}, "retry": {"failed"}, "translate": {"draft"}, "audio": {"draft"}, "audio-replace-page": {"draft", "failed"}, "audio-missing": {"draft"}, "audio-regenerate-us": {"draft"}, "audio-regenerate-uk": {"draft"}, "audio-retry-failed": {"draft"}, "confirm-text": {"draft", "failed"}, "next-page": {"draft"}, "reocr": {"draft", "failed"}}
 		ok := false
 		for _, st := range allowed[action] {
 			if d.Status == st {
@@ -916,7 +924,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 		if !ok || (action == "reject" && strings.TrimSpace(note) == "") {
 			return conflict("当前状态不允许此操作；退回时必须填写意见")
 		}
-		next := map[string]string{"submit": "in_review", "approve": "approved", "reject": "draft", "withdraw": "draft", "publish": "published", "retry": "queued", "translate": "queued", "audio": "queued", "audio-replace-page": "queued", "audio-missing": "queued", "audio-regenerate-us": "queued", "audio-regenerate-uk": "queued", "audio-retry-failed": "queued", "next-page": "queued", "reocr": "queued"}[action]
+		next := map[string]string{"submit": "in_review", "approve": "approved", "reject": "draft", "withdraw": "draft", "publish": "published", "retry": "queued", "translate": "queued", "audio": "queued", "audio-replace-page": "queued", "audio-missing": "queued", "audio-regenerate-us": "queued", "audio-regenerate-uk": "queued", "audio-retry-failed": "queued", "confirm-text": "draft", "next-page": "queued", "reocr": "queued"}[action]
 		if action == "submit" || action == "approve" || action == "publish" {
 			var pages []model.TextbookDraftPage
 			if e := tx.Where("draft_id=?", id).Find(&pages).Error; e != nil {
@@ -956,6 +964,31 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				}
 			}
 			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: job.Kind, Page: job.Page, Status: "queued", Total: job.Total}).Error; e != nil {
+				return e
+			}
+		}
+		if action == "confirm-text" {
+			if page < 1 {
+				return bad("请指定要确认文字的页面")
+			}
+			var current model.TextbookDraftPage
+			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
+				return bad(fmt.Sprintf("第 %d 页尚未生成", page))
+			}
+			if issues := pageTextReviewIssues(current.Content); len(issues) > 0 {
+				return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", page, strings.Join(issues, "；")))
+			}
+			updates := map[string]any{
+				"checked": true,
+				"version": gorm.Expr("version+1"),
+			}
+			// A page with no speakable items, or a draft with audio disabled,
+			// has no independent audio work to review.
+			if !hasAudioItems(current.Content) || len(draftAudioConfig(d).EnabledVoices()) == 0 {
+				updates["audio_checked"] = true
+			}
+			if e := tx.Model(&current).Updates(updates).Error; e != nil {
 				return e
 			}
 		}
@@ -1023,6 +1056,9 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 					return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 				}
 			}
+			if !current.Checked {
+				return bad(fmt.Sprintf("请先确认第 %d 页正文，再生成音频", current.Position))
+			}
 			if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
 				return bad(fmt.Sprintf("第 %d 页暂不能生成音频：%s", current.Position, strings.Join(issues, "；")))
 			}
@@ -1035,6 +1071,9 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			}
 			if active > 0 {
 				return conflict("已有页面生成任务正在进行")
+			}
+			if e := tx.Model(&current).Update("audio_checked", false).Error; e != nil {
+				return e
 			}
 			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: "audio", Page: current.Position, Status: "queued"}).Error; e != nil {
 				return e
@@ -1095,6 +1134,28 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if pageCount == 0 {
 				return conflict("当前草稿还没有可生成音频的页面")
 			}
+			if action == "audio-missing" {
+				var pages []model.TextbookDraftPage
+				if e := tx.Where("draft_id=?", id).Order("position").Find(&pages).Error; e != nil {
+					return e
+				}
+				pending := 0
+				for index := range pages {
+					p := &pages[index]
+					if !p.Checked || len(pageTextReviewIssues(p.Content)) > 0 || !hasAudioItems(p.Content) {
+						continue
+					}
+					if s.missingDraftAudio(d, *p) {
+						pending++
+						if e := tx.Model(p).Update("audio_checked", false).Error; e != nil {
+							return e
+						}
+					}
+				}
+				if pending == 0 {
+					return conflict("没有已确认且缺失音频的页面")
+				}
+			}
 			kind, accent, voice := "audio-missing", "", ""
 			config := draftAudioConfig(d)
 			configuredVoices := draftVoices(d)
@@ -1151,10 +1212,11 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				return conflict("第 1 页尚未转换完成")
 			}
 			current := pages[len(pages)-1]
-			var content map[string]any
-			_ = json.Unmarshal([]byte(current.Content), &content)
-			if !current.Checked || !current.AudioChecked || len(publicationIssues(content)) > 0 || s.missingDraftAudio(d, current) {
-				return bad(fmt.Sprintf("请先完成并保存第 %d 页的 OCR 与已启用音频核对", current.Position))
+			if !current.Checked {
+				return bad(fmt.Sprintf("请先确认第 %d 页正文", current.Position))
+			}
+			if issues := pageTextReviewIssues(current.Content); len(issues) > 0 {
+				return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", current.Position, strings.Join(issues, "；")))
 			}
 			nextPage := current.Position + 1
 			if nextPage > d.SourcePageCount {
@@ -1667,6 +1729,11 @@ func (s *EditorService) runBookAudioJob(ctx context.Context, job *model.Textbook
 	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(pages)})
 	errorsFound := make([]string, 0)
 	for index, page := range pages {
+		if job.Kind == "audio-missing" && (!page.Checked || len(pageTextReviewIssues(page.Content)) > 0) {
+			job.Progress = index + 1
+			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+			continue
+		}
 		if !hasAudioItems(page.Content) {
 			job.Progress = index + 1
 			continue
