@@ -955,7 +955,7 @@ class LocalStructureError(ValueError):
     """Local-model output is syntactically valid enough to inspect but structurally unusable."""
 
 
-LOCAL_TRANSLATION_BATCH_SEGMENTS = 3
+LOCAL_TRANSLATION_BATCH_SEGMENTS = 1
 
 
 def _local_shared_context(items: list[dict[str, Any]]) -> str:
@@ -1805,7 +1805,7 @@ def local_translate_candidates(
                     "message": (
                         f"本地分批翻译 {batch_index}/{total_batches}："
                         f"{len(batch_items)} 个片段，{word_count} 个单词；"
-                        "每批最多 3 个片段，共享 context 只发送一次"
+                        "每次只处理 1 个片段，共享 context 只发送一次"
                     ),
                 },
                 ensure_ascii=False,
