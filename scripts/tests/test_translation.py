@@ -611,6 +611,113 @@ class TranslationTests(unittest.TestCase):
         )
 
 
+
+    def test_local_batches_respect_segment_and_word_limits(self):
+        from translate_page import local_translation_batches
+
+        items = [
+            {"id": "s1", "words": [{"id": f"w1-{i}"} for i in range(8)]},
+            {"id": "s2", "words": [{"id": f"w2-{i}"} for i in range(7)]},
+            {"id": "s3", "words": [{"id": f"w3-{i}"} for i in range(9)]},
+            {"id": "s4", "words": [{"id": f"w4-{i}"} for i in range(2)]},
+            {"id": "s5", "words": []},
+        ]
+        batches = local_translation_batches(items)
+        self.assertEqual([[item["id"] for item in batch] for batch in batches],
+                         [["s1", "s2"], ["s3", "s4", "s5"]])
+        self.assertTrue(all(len(batch) <= 4 for batch in batches))
+        self.assertTrue(
+            all(sum(len(item["words"]) for item in batch) <= 20 for batch in batches)
+        )
+
+    def test_local_batch_keeps_one_dense_segment_atomic(self):
+        from translate_page import local_translation_batches
+
+        dense = {"id": "s1", "words": [{"id": f"w{i}"} for i in range(24)]}
+        batches = local_translation_batches([dense])
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0][0]["id"], "s1")
+        self.assertEqual(len(batches[0][0]["words"]), 24)
+
+    def test_local_structured_call_retries_malformed_json_once(self):
+        from translate_page import (
+            LocalMLXBackend,
+            _local_structured_call,
+        )
+
+        backend = object.__new__(LocalMLXBackend)
+        backend.model = "local-qwen3-4b-instruct-2507"
+        backend.operation_label = "本地翻译"
+        backend.request_type = "page_translation"
+        backend.page_number = 7
+        backend.attempt = 1
+        backend.status_callback = None
+        responses = iter([
+            '{"segments":[{"id":"s1" "translation":"你好","words":[]}]}',
+            '{"segments":[{"id":"s1","translation":"你好","words":[]}]}',
+        ])
+
+        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
+            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+            return next(responses)
+
+        backend.generate_structured = generate_structured
+        calls = {"count": 0}
+
+        def parser(raw):
+            calls["count"] += 1
+            return json.loads(raw)
+
+        result = _local_structured_call(
+            backend,
+            "system",
+            "prompt",
+            kind="page_translation",
+            page=7,
+            parser=parser,
+            schema=BATCH_TRANSLATION_SCHEMA,
+            max_completion_tokens=512,
+            batch_index=1,
+            batch_total=3,
+        )
+        self.assertEqual(result["segments"][0]["id"], "s1")
+        self.assertEqual(calls["count"], 2)
+
+    def test_local_structured_call_does_not_retry_semantic_validation_error(self):
+        from translate_page import LocalMLXBackend, _local_structured_call
+
+        backend = object.__new__(LocalMLXBackend)
+        backend.model = "local-qwen3-4b-instruct-2507"
+        backend.operation_label = "本地翻译"
+        backend.request_type = "page_translation"
+        backend.page_number = 7
+        backend.attempt = 1
+        backend.status_callback = None
+        calls = {"count": 0}
+
+        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
+            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+            calls["count"] += 1
+            return '{"segments":[]}'
+
+        backend.generate_structured = generate_structured
+
+        with self.assertRaisesRegex(ValueError, "semantic failure"):
+            _local_structured_call(
+                backend,
+                "system",
+                "prompt",
+                kind="page_translation",
+                page=7,
+                parser=lambda raw: (_ for _ in ()).throw(ValueError("semantic failure")),
+                schema=BATCH_TRANSLATION_SCHEMA,
+                max_completion_tokens=512,
+                batch_index=2,
+                batch_total=3,
+            )
+        self.assertEqual(calls["count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
