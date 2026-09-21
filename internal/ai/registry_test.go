@@ -41,3 +41,23 @@ func TestLocalTTSVariantsRegisteredWithSameVoices(t *testing.T) {
 		}
 	}
 }
+
+
+func TestTranslationModelsRegistered(t *testing.T) {
+	t.Setenv("TRANSLATION_API_KEY", "test-only")
+	cloud, ok := Find(CloudTranslationModel)
+	if !ok || cloud.Type != "translation" || !cloud.Cloud || !cloud.Available {
+		t.Fatalf("unexpected cloud translation metadata: %#v", cloud)
+	}
+	local, ok := Find(LocalTranslationModel)
+	if !ok || local.Type != "translation" || local.Cloud || local.Provider != "local-mlx" {
+		t.Fatalf("unexpected local translation metadata: %#v", local)
+	}
+	if !IsLocalTranslation(LocalTranslationModel) {
+		t.Fatal("local translation model should be recognized as local MLX")
+	}
+	settings := NormalizeSettings(Settings{})
+	if settings.TranslationModel != CloudTranslationModel {
+		t.Fatalf("default translation model = %q", settings.TranslationModel)
+	}
+}
