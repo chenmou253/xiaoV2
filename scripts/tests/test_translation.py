@@ -651,6 +651,40 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "世界")
 
+    def test_local_translation_accepts_literal_tab_marker(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Let's spell.",
+            "target_text": "Let's spell.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Let's", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "spell", "phonetic": ""},
+            ],
+        }]
+        raw = (
+            "S<TAB>0<TAB>我们来拼写一下。\n"
+            "W<TAB>0<TAB>0<TAB>让我们<TAB>lɛts\n"
+            "W<TAB>0<TAB>1<TAB>拼写<TAB>spɛl"
+        )
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["translation"], "我们来拼写一下。")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "拼写")
+
+    def test_local_translation_accepts_literal_backslash_t_marker(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello.",
+            "target_text": "Hello.",
+            "words": [{"id": "p54-s0-w0", "text": "Hello", "phonetic": ""}],
+        }]
+        raw = "S\\t0\\t你好。\nW\\t0\\t0\\t你好\\thəˈloʊ"
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["translation"], "你好。")
+
     def test_local_translation_rejects_missing_word_line(self):
         from translate_page import LocalStructureError, parse_local_translation
 
