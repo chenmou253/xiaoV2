@@ -779,12 +779,10 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 			}
 			// A user edit unlocks the page for a fresh TTS pass under the current
 			// draft default; OCR provenance remains the last recognized model.
-			p.TranslationModel = draftModelSettings(d).TranslationModel
 			p.TTSModel, p.TTSVoice = draftModelSettings(d).TTSModel, draftModelSettings(d).TTSVoice
 		}
 		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "version": gorm.Expr("version+1")}
 		if generationChanged {
-			pageUpdates["translation_model"] = p.TranslationModel
 			pageUpdates["tts_model"], pageUpdates["tts_voice"] = p.TTSModel, p.TTSVoice
 		}
 		if input.Checked && input.AudioChecked && p.OCRModel == "" {
