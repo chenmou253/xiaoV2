@@ -92,8 +92,9 @@ func seed(db *gorm.DB) error {
 	}
 	modelSettings := []model.SiteSetting{
 		{DictCode: "ai.ocr_model", ItemLabel: "OCR 模型", ItemValue: "local-paddleocr", Sort: 10, Status: 1},
-		{DictCode: "ai.tts_model", ItemLabel: "TTS 模型", ItemValue: "local-qwen3-tts", Sort: 20, Status: 1},
-		{DictCode: "ai.tts_voice", ItemLabel: "TTS 音色", ItemValue: "aiden", Sort: 30, Status: 1},
+		{DictCode: "ai.translation_model", ItemLabel: "翻译模型", ItemValue: "qwen3.7-flash", Sort: 20, Status: 1},
+		{DictCode: "ai.tts_model", ItemLabel: "TTS 模型", ItemValue: "local-qwen3-tts", Sort: 30, Status: 1},
+		{DictCode: "ai.tts_voice", ItemLabel: "TTS 音色", ItemValue: "aiden", Sort: 40, Status: 1},
 	}
 	for index := range modelSettings {
 		row := modelSettings[index]
