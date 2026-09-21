@@ -612,7 +612,7 @@ class TranslationTests(unittest.TestCase):
 
 
 
-    def test_local_prompt_does_not_expose_ids(self):
+    def test_local_prompt_uses_line_protocol_without_business_ids(self):
         from translate_page import local_translation_prompt
 
         items = [{
@@ -627,14 +627,13 @@ class TranslationTests(unittest.TestCase):
         prompt = local_translation_prompt(items)
         self.assertNotIn("p54-s0", prompt)
         self.assertNotIn("p54-s0-w0", prompt)
-        self.assertIn("Hello world.", prompt)
-        self.assertIn('"segment_count":1', prompt)
-        self.assertIn('"segment_index":0', prompt)
-        self.assertIn('"word_count":2', prompt)
-        self.assertIn('"word_index":0', prompt)
-        self.assertIn('"text":"Hello"', prompt)
+        self.assertIn("SEGMENT_COUNT\t1", prompt)
+        self.assertIn("SEGMENT\t0", prompt)
+        self.assertIn("WORD_COUNT\t2", prompt)
+        self.assertIn("WORD\t0\tHello", prompt)
+        self.assertIn("WORD\t1\tworld", prompt)
 
-    def test_local_translation_maps_results_back_by_position(self):
+    def test_local_translation_line_protocol_maps_back_to_real_ids(self):
         from translate_page import parse_local_translation
 
         items = [{
@@ -646,26 +645,14 @@ class TranslationTests(unittest.TestCase):
                 {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
             ],
         }]
-        raw = json.dumps(
-            {
-                "segments": [{
-                    "segment_index": 0,
-                    "translation": "你好，世界。",
-                    "words": [
-                        {"word_index": 0, "meaning": "你好", "phonetic": "həˈloʊ"},
-                        {"word_index": 1, "meaning": "世界", "phonetic": "wɝːld"},
-                    ],
-                }]
-            },
-            ensure_ascii=False,
-        )
+        raw = "S\t0\t你好，世界。\nW\t0\t0\t你好\thəˈloʊ\nW\t0\t1\t世界\twɝːld"
         parsed = parse_local_translation(raw, items)
         self.assertEqual(parsed["p54-s0"]["translation"], "你好，世界。")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
         self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "世界")
 
-    def test_local_translation_rejects_position_count_mismatch(self):
-        from translate_page import parse_local_translation
+    def test_local_translation_rejects_missing_word_line(self):
+        from translate_page import LocalStructureError, parse_local_translation
 
         items = [{
             "id": "p54-s0",
@@ -676,20 +663,11 @@ class TranslationTests(unittest.TestCase):
                 {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
             ],
         }]
-        raw = json.dumps(
-            {
-                "segments": [{
-                    "segment_index": 0,
-                    "translation": "你好，世界。",
-                    "words": [{"word_index": 0, "meaning": "你好", "phonetic": "həˈloʊ"}],
-                }]
-            },
-            ensure_ascii=False,
-        )
-        with self.assertRaisesRegex(ValueError, "word count mismatch"):
+        raw = "S\t0\t你好，世界。\nW\t0\t0\t你好\thəˈloʊ"
+        with self.assertRaisesRegex(LocalStructureError, "word coverage mismatch"):
             parse_local_translation(raw, items)
 
-    def test_local_translation_uses_temporary_indexes_as_authority(self):
+    def test_local_translation_accepts_protocol_lines_in_any_order(self):
         from translate_page import parse_local_translation
 
         items = [
@@ -706,28 +684,17 @@ class TranslationTests(unittest.TestCase):
                 "words": [{"id": "p54-s1-w0", "text": "Second", "phonetic": ""}],
             },
         ]
-        raw = json.dumps(
-            {
-                "segments": [
-                    {
-                        "segment_index": 1,
-                        "translation": "第二。",
-                        "words": [{"word_index": 0, "meaning": "第二", "phonetic": "ˈsɛkənd"}],
-                    },
-                    {
-                        "segment_index": 0,
-                        "translation": "第一。",
-                        "words": [{"word_index": 0, "meaning": "第一", "phonetic": "fɝːst"}],
-                    },
-                ]
-            },
-            ensure_ascii=False,
+        raw = (
+            "W\t1\t0\t第二\tˈsɛkənd\n"
+            "S\t0\t第一。\n"
+            "W\t0\t0\t第一\tfɝːst\n"
+            "S\t1\t第二。"
         )
         parsed = parse_local_translation(raw, items)
         self.assertEqual(parsed["p54-s0"]["translation"], "第一。")
         self.assertEqual(parsed["p54-s1"]["translation"], "第二。")
 
-    def test_local_review_uses_indexes_not_ids(self):
+    def test_local_review_line_protocol_uses_indexes(self):
         from translate_page import local_review_prompt, parse_local_review
 
         items = [{
@@ -744,30 +711,34 @@ class TranslationTests(unittest.TestCase):
         }
         prompt = local_review_prompt(items, candidates)
         self.assertNotIn("p54-s0", prompt)
-        raw = json.dumps(
-            {
-                "issues": [{
-                    "segment_index": 0,
-                    "word_index": 0,
-                    "field": "meaning",
-                    "reason": "词义需更准确",
-                    "suggestion": "苹果（复数）",
-                }]
-            },
-            ensure_ascii=False,
+        self.assertIn("SEGMENT\t0", prompt)
+        self.assertIn("WORD\t0\tapples", prompt)
+        reviewed = parse_local_review(
+            "W\t0\t0\tmeaning\t词义需更准确\t苹果（复数）",
+            items,
+            candidates,
         )
-        reviewed = parse_local_review(raw, items, candidates)
         self.assertEqual(
             reviewed["p54-s0"]["words"]["p54-s0-w0"]["meaning"],
             "苹果（复数）",
         )
 
-    def test_local_structured_call_retries_malformed_json_once(self):
-        from translate_page import (
-            LOCAL_TRANSLATION_SCHEMA,
-            LocalMLXBackend,
-            _local_structured_call,
-        )
+    def test_local_review_ok_keeps_candidates(self):
+        from translate_page import parse_local_review
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello.",
+            "target_text": "Hello.",
+            "words": [],
+        }]
+        candidates = {"p54-s0": {"translation": "你好。", "words": {}}}
+        reviewed = parse_local_review("OK", items, candidates)
+        self.assertEqual(reviewed["p54-s0"]["translation"], "你好。")
+        self.assertTrue(reviewed["p54-s0"]["passed"])
+
+    def test_local_protocol_call_bypasses_generate_structured_and_retries_once(self):
+        from translate_page import LocalMLXBackend, _local_protocol_call
 
         backend = object.__new__(LocalMLXBackend)
         backend.model = "local-qwen3-4b-instruct-2507"
@@ -777,40 +748,44 @@ class TranslationTests(unittest.TestCase):
         backend.attempt = 1
         backend.status_callback = None
         responses = iter([
-            '{"segments":[{"segment_index":0,"translation":"你好" "words":[]}]}',
-            '{"segments":[{"segment_index":0,"translation":"你好","words":[]}]}',
+            "BROKEN",
+            "S\t0\t你好",
         ])
+        calls = {"generate": 0, "structured": 0}
 
-        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
-            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+        def generate(system_prompt, user_prompt, max_tokens):
+            del system_prompt, user_prompt, max_tokens
+            calls["generate"] += 1
             return next(responses)
 
+        def generate_structured(*args, **kwargs):
+            calls["structured"] += 1
+            raise AssertionError("local line protocol must not call generate_structured")
+
+        backend.generate = generate
         backend.generate_structured = generate_structured
-        calls = {"count": 0}
 
         def parser(raw):
-            calls["count"] += 1
-            return json.loads(raw)
+            if raw == "BROKEN":
+                from translate_page import LocalStructureError
+                raise LocalStructureError("bad protocol")
+            return raw
 
-        result = _local_structured_call(
+        result = _local_protocol_call(
             backend,
             "system",
             "prompt",
             kind="page_translation",
             page=7,
             parser=parser,
-            schema=LOCAL_TRANSLATION_SCHEMA,
             max_completion_tokens=512,
         )
-        self.assertEqual(result["segments"][0]["translation"], "你好")
-        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result, "S\t0\t你好")
+        self.assertEqual(calls["generate"], 2)
+        self.assertEqual(calls["structured"], 0)
 
-    def test_local_structured_call_stops_after_second_json_failure(self):
-        from translate_page import (
-            LOCAL_TRANSLATION_SCHEMA,
-            LocalMLXBackend,
-            _local_structured_call,
-        )
+    def test_local_protocol_call_stops_after_second_failure(self):
+        from translate_page import LocalMLXBackend, LocalStructureError, _local_protocol_call
 
         backend = object.__new__(LocalMLXBackend)
         backend.model = "local-qwen3-4b-instruct-2507"
@@ -821,57 +796,20 @@ class TranslationTests(unittest.TestCase):
         backend.status_callback = None
         calls = {"count": 0}
 
-        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
-            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+        def generate(system_prompt, user_prompt, max_tokens):
+            del system_prompt, user_prompt, max_tokens
             calls["count"] += 1
-            return '{"segments":[{"segment_index":0,"translation":"坏掉" "words":[]}]}'
+            return "BROKEN"
 
-        backend.generate_structured = generate_structured
-        with self.assertRaises(json.JSONDecodeError):
-            _local_structured_call(
+        backend.generate = generate
+        with self.assertRaises(LocalStructureError):
+            _local_protocol_call(
                 backend,
                 "system",
                 "prompt",
                 kind="page_translation",
                 page=7,
-                parser=json.loads,
-                schema=LOCAL_TRANSLATION_SCHEMA,
-                max_completion_tokens=512,
-            )
-        self.assertEqual(calls["count"], 2)
-
-    def test_local_structured_call_retries_structure_mismatch_once_without_splitting(self):
-        from translate_page import (
-            LOCAL_TRANSLATION_SCHEMA,
-            LocalMLXBackend,
-            LocalStructureError,
-            _local_structured_call,
-        )
-
-        backend = object.__new__(LocalMLXBackend)
-        backend.model = "local-qwen3-4b-instruct-2507"
-        backend.operation_label = "本地翻译"
-        backend.request_type = "page_translation"
-        backend.page_number = 7
-        backend.attempt = 1
-        backend.status_callback = None
-        calls = {"count": 0}
-
-        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
-            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
-            calls["count"] += 1
-            return '{"segments":[]}'
-
-        backend.generate_structured = generate_structured
-        with self.assertRaisesRegex(LocalStructureError, "count mismatch"):
-            _local_structured_call(
-                backend,
-                "system",
-                "prompt",
-                kind="page_translation",
-                page=7,
-                parser=lambda raw: (_ for _ in ()).throw(LocalStructureError("count mismatch")),
-                schema=LOCAL_TRANSLATION_SCHEMA,
+                parser=lambda raw: (_ for _ in ()).throw(LocalStructureError("bad protocol")),
                 max_completion_tokens=512,
             )
         self.assertEqual(calls["count"], 2)
