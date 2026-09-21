@@ -122,15 +122,19 @@ LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translati
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
 
-The input contains one shared "context" for the current batch and an ordered "items" array. Each item contains one target sentence and an ordered words array.
+The request contains one shared "context", an ordered "items" array, and an OUTPUT TEMPLATE whose array sizes are already correct.
 The shared context applies to every item in this batch. Use it only to resolve ambiguity; do not translate it.
+Copy the OUTPUT TEMPLATE structure exactly and fill only its empty string values.
 Return exactly this shape:
 {"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
 
 Critical structure rules:
 - NEVER output segment IDs or word IDs.
 - Output exactly one segments element for every input item, in the same order.
-- Inside each segment, output exactly one words element for every input word, in the same order.
+- The OUTPUT TEMPLATE already contains the exact number of segments and word objects.
+- Copy that template exactly. Only replace empty string values with answers.
+- Inside each segment, preserve exactly one words element for every input word, in the same order.
+- Never replace a word object with the source word string.
 - Never add, omit, merge, split, or reorder segments or words.
 - NEVER omit a word object just because you are unsure of its answer.
 - If you cannot confidently determine a word's Chinese meaning, still return that word object with "meaning": "".
@@ -743,6 +747,16 @@ def _clean_json_payload(value: Any) -> str:
     raise ValueError("structured response does not contain a JSON object")
 
 
+def _strict_local_json_payload(value: Any) -> str:
+    """Accept only the complete local-model JSON object, never an inner object."""
+    text = _remove_thinking(str(value or "").strip())
+    text = CODE_FENCE_RE.sub("", text).strip()
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise LocalStructureError("local structured response must be one complete JSON object")
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def parse_review(value: Any, candidate: str) -> ReviewResult:
     payload = json.loads(_clean_json_payload(value))
     if not isinstance(payload, dict):
@@ -984,6 +998,22 @@ def _local_item_batches(
     return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
 
 
+def local_translation_output_template(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the exact positional JSON skeleton the local translator must fill."""
+    return {
+        "segments": [
+            {
+                "translation": "",
+                "words": [
+                    {"meaning": "", "phonetic": ""}
+                    for _ in item["words"]
+                ],
+            }
+            for item in items
+        ]
+    }
+
+
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     payload = {
         "context": _local_shared_context(items),
@@ -1001,13 +1031,19 @@ def local_translation_prompt(items: list[dict[str, Any]]) -> str:
             for item in items
         ],
     }
+    output_template = local_translation_output_template(items)
     return (
         "Translate the following ordered textbook batch. "
         "The top-level context is shared by all items and is background only; do not translate it. "
         "Do not output or reconstruct any source IDs. "
-        "Keep the number and order of segments and words exactly unchanged. "
-        "Never omit a word object; use empty strings for unknown meaning or phonetic values.\n\n"
+        "The OUTPUT TEMPLATE already has the exact required array lengths. "
+        "Copy its JSON structure exactly and ONLY replace empty string values. "
+        "Never replace a word object with source text. "
+        "If an answer is unknown, leave that value as an empty string.\n\n"
+        "SOURCE INPUT:\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        + "\n\nOUTPUT TEMPLATE:\n"
+        + json.dumps(output_template, ensure_ascii=False, separators=(",", ":"))
     )
 
 
@@ -1015,8 +1051,8 @@ def parse_local_translation(
     value: Any,
     items: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    payload = json.loads(_clean_json_payload(value))
-    if not isinstance(payload, dict) or set(payload) != {"segments"}:
+    payload = json.loads(_strict_local_json_payload(value))
+    if set(payload) != {"segments"}:
         raise LocalStructureError("local translator response must contain only a segments array")
     raw_segments = payload["segments"]
     if not isinstance(raw_segments, list):
@@ -1105,7 +1141,7 @@ def parse_local_review(
     items: list[dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    payload = json.loads(_clean_json_payload(value))
+    payload = json.loads(_strict_local_json_payload(value))
     if not isinstance(payload, dict) or set(payload) != {"issues"}:
         raise LocalStructureError("local reviewer response must contain only an issues array")
     issues = payload["issues"]
@@ -1205,8 +1241,8 @@ def _local_structured_call(
                 retry_instruction = (
                     "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
                     "Regenerate the entire same request from scratch. Return ONLY one "
-                    "complete JSON object. Keep every array length and position exactly "
-                    "the same as the input. Do not output IDs."
+                    "complete JSON object. Copy the supplied OUTPUT TEMPLATE structure exactly; "
+                    "keep every array length and position unchanged. Do not output IDs."
                 )
             raw = _generate_once(
                 backend,
