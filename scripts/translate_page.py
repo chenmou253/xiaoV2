@@ -119,19 +119,21 @@ BATCH_REVIEWER_SYSTEM_PROMPT = (
 
 LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic translation engine for children's English textbooks.
 
-Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, or reasoning.
+Return ONLY protocol lines. Never return JSON, Markdown, code fences, labels, explanations, notes, reasoning, indexes, IDs, or counts.
 
 Output protocol uses the REAL TAB character U+0009 between fields. Do not write the literal text <TAB>.
-S\tsegment_index\tChinese sentence translation
-W\tsegment_index\tword_index\tChinese word meaning\tGeneral American IPA
+S\tChinese sentence translation
+W\tChinese word meaning\tGeneral American IPA
 
-Rules:
-- Output exactly one S line for every supplied SEGMENT.
-- Output exactly one W line for every supplied WORD.
-- Copy segment_index and word_index exactly.
-- Never add, omit, merge, duplicate, or renumber any item.
-- Do not output source/business IDs.
+Critical ordering rules:
+- Process the input SEGMENT blocks strictly from top to bottom.
+- For each SEGMENT, output exactly one S line first.
+- Immediately after that S line, output exactly one W line for each supplied WORD, in the same order as those WORD lines.
+- Do not output segment_index, word_index, row numbers, IDs, or counts.
+- Never add, omit, merge, duplicate, or reorder S/W lines.
 - Do not put TAB or newline characters inside translation, meaning, or phonetic fields.
+
+Translation rules:
 - Translate only the target sentence, using context only to resolve ambiguity.
 - Use concise natural Simplified Chinese suitable for Chinese students.
 - Preserve negation, names, numbers, dates, times, and factual information.
@@ -141,10 +143,10 @@ Rules:
 - Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
 - Use an empty final phonetic field only when the source is not pronounceable as an English word.
 
-Example (the separators shown below are real U+0009 TAB characters):
-S\t0\t它是什么颜色？
-W\t0\t0\t什么\twʌt
-W\t0\t1\t颜色\tˈkʌlər
+Example for one segment containing two words:
+S\t它是什么颜色？
+W\t什么\twʌt
+W\t颜色\tˈkʌlər
 """
 
 LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for children's English textbook translations.
@@ -920,17 +922,18 @@ def _normalize_protocol_line(value: str) -> str:
 
 
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
-    lines = [
-        f"SEGMENT_COUNT\t{len(items)}",
-    ]
-    for segment_index, item in enumerate(items):
-        lines.append(f"SEGMENT\t{segment_index}")
+    lines = [f"SEGMENT_COUNT\t{len(items)}"]
+    for item in items:
+        lines.append("SEGMENT")
         lines.append("CONTEXT\t" + _protocol_clean_field(item["context"]))
         lines.append("TEXT\t" + _protocol_clean_field(item["target_text"]))
         lines.append(f"WORD_COUNT\t{len(item['words'])}")
-        for word_index, word in enumerate(item["words"]):
+        for word in item["words"]:
             lines.append(
-                f"WORD\t{word_index}\t{_protocol_clean_field(word['text'])}\t{_protocol_clean_field(word.get('phonetic', ''))}"
+                "WORD\t"
+                + _protocol_clean_field(word["text"])
+                + "\t"
+                + _protocol_clean_field(word.get("phonetic", ""))
             )
         lines.append("END_SEGMENT")
     return "\n".join(lines)
@@ -943,80 +946,62 @@ def parse_local_translation(
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise LocalStructureError("local translator returned empty protocol")
+
+    expected_rows: list[tuple[str, int, int | None]] = []
+    for segment_index, item in enumerate(items):
+        expected_rows.append(("S", segment_index, None))
+        for word_index in range(len(item["words"])):
+            expected_rows.append(("W", segment_index, word_index))
+
+    raw_lines = [
+        _normalize_protocol_line(raw_line.strip())
+        for raw_line in text.split("\n")
+        if raw_line.strip()
+    ]
+    if len(raw_lines) != len(expected_rows):
+        raise LocalStructureError(
+            f"local translator row count mismatch: got {len(raw_lines)}, want {len(expected_rows)}"
+        )
+
     sentence_results: dict[int, str] = {}
     word_results: dict[tuple[int, int], dict[str, str]] = {}
-    for line_number, raw_line in enumerate(text.split("\n"), 1):
-        line = _normalize_protocol_line(raw_line.strip())
-        if not line:
-            continue
+    for line_number, (line, expected) in enumerate(zip(raw_lines, expected_rows), 1):
+        expected_kind, segment_index, word_index = expected
         parts = line.split("\t")
         kind = parts[0].strip()
-        if kind == "S":
-            if len(parts) != 3:
-                raise LocalStructureError(f"local translator invalid S line at {line_number}")
-            try:
-                segment_index = int(parts[1])
-            except ValueError as exc:
-                raise LocalStructureError(f"local translator invalid segment index at line {line_number}") from exc
-            if segment_index < 0 or segment_index >= len(items):
-                raise LocalStructureError(f"local translator segment index out of range: {segment_index}")
-            if segment_index in sentence_results:
-                raise LocalStructureError(f"local translator duplicate sentence: {segment_index}")
-            translation = clean_translation(parts[2])
+        if kind != expected_kind:
+            raise LocalStructureError(
+                f"local translator row type mismatch at line {line_number}: "
+                f"got {kind or '<empty>'}, want {expected_kind}"
+            )
+
+        if expected_kind == "S":
+            if len(parts) != 2:
+                raise LocalStructureError(
+                    f"local translator invalid S line at {line_number}: got {len(parts)} fields, want 2"
+                )
+            translation = clean_translation(parts[1])
             if not translation:
-                raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+                raise ValueError(
+                    f"local translator returned empty translation at segment {segment_index}"
+                )
             sentence_results[segment_index] = translation
             continue
-        if kind == "W":
-            if len(parts) != 5:
-                raise LocalStructureError(f"local translator invalid W line at {line_number}")
-            try:
-                segment_index = int(parts[1])
-                word_index = int(parts[2])
-            except ValueError as exc:
-                raise LocalStructureError(f"local translator invalid word index at line {line_number}") from exc
-            if segment_index < 0 or segment_index >= len(items):
-                raise LocalStructureError(f"local translator segment index out of range: {segment_index}")
-            if word_index < 0 or word_index >= len(items[segment_index]["words"]):
-                raise LocalStructureError(
-                    f"local translator word index out of range: {segment_index}:{word_index}"
-                )
-            key = (segment_index, word_index)
-            if key in word_results:
-                raise LocalStructureError(
-                    f"local translator duplicate word: {segment_index}:{word_index}"
-                )
-            meaning = clean_translation(parts[3])
-            if not meaning:
-                raise ValueError(
-                    f"local translator returned empty meaning at {segment_index}:{word_index}"
-                )
-            word_results[key] = {
-                "meaning": meaning,
-                "phonetic": clean_phonetic(parts[4]),
-            }
-            continue
-        raise LocalStructureError(f"local translator unexpected protocol line at {line_number}: {kind}")
 
-    expected_sentences = set(range(len(items)))
-    if set(sentence_results) != expected_sentences:
-        missing = sorted(expected_sentences - set(sentence_results))
-        extra = sorted(set(sentence_results) - expected_sentences)
-        raise LocalStructureError(
-            f"local translator sentence coverage mismatch: missing={missing} extra={extra}"
-        )
-
-    expected_words = {
-        (segment_index, word_index)
-        for segment_index, item in enumerate(items)
-        for word_index in range(len(item["words"]))
-    }
-    if set(word_results) != expected_words:
-        missing = sorted(expected_words - set(word_results))
-        extra = sorted(set(word_results) - expected_words)
-        raise LocalStructureError(
-            f"local translator word coverage mismatch: missing={missing} extra={extra}"
-        )
+        if len(parts) != 3:
+            raise LocalStructureError(
+                f"local translator invalid W line at {line_number}: got {len(parts)} fields, want 3"
+            )
+        meaning = clean_translation(parts[1])
+        if not meaning:
+            raise ValueError(
+                f"local translator returned empty meaning at {segment_index}:{word_index}"
+            )
+        assert word_index is not None
+        word_results[(segment_index, word_index)] = {
+            "meaning": meaning,
+            "phonetic": clean_phonetic(parts[2]),
+        }
 
     result: dict[str, dict[str, Any]] = {}
     for segment_index, item in enumerate(items):
@@ -1170,9 +1155,9 @@ def _local_protocol_call(
                 retry_instruction = (
                     "\n\nPREVIOUS OUTPUT VIOLATED THE LINE PROTOCOL. "
                     "Regenerate the entire same request from scratch. "
-                    "Return ONLY S/W protocol lines (or OK for reviewer). "
-                    "Do not output JSON, Markdown, or explanations. "
-                    "Return every supplied temporary index exactly once."
+                    "Return ONLY the exact S/W protocol required by the system prompt "
+                    "(or OK for reviewer). Do not output JSON, Markdown, or explanations. "
+                    "Preserve the required row count and order exactly."
                 )
             # IMPORTANT: local protocol bypasses generate_structured entirely.
             # The model produces plain text; only the cloud path uses JSON Schema.
@@ -1710,7 +1695,7 @@ def local_translate_candidates(
         json.dumps(
             {
                 "event": "status",
-                "message": f"本地整页翻译：{len(items)} 个片段，{word_count} 个单词；结果按输入位置绑定，不由模型生成 ID",
+                "message": f"本地整页翻译：{len(items)} 个片段，{word_count} 个单词；模型只返回 S/W 内容行，程序按输入顺序绑定 OCR ID",
             },
             ensure_ascii=False,
         ),
