@@ -263,6 +263,170 @@ type DraftPageView struct {
 	Issues       []string       `json:"issues"`
 }
 
+
+func clonePageContent(content map[string]any) (map[string]any, error) {
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return nil, err
+	}
+	var cloned map[string]any
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return nil, err
+	}
+	return cloned, nil
+}
+
+// stripTranslationFields keeps textbook_draft_pages.content limited to OCR
+// structure, coordinates and audio metadata. Translation data is owned only by
+// textbook_translation_items.
+func stripTranslationFields(content map[string]any) {
+	segments, _ := content["segments"].([]any)
+	for _, rawSegment := range segments {
+		segment, ok := rawSegment.(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(segment, "translation")
+		delete(segment, "context")
+		delete(segment, "paragraph")
+		delete(segment, "block_text")
+		delete(segment, "block")
+		words, _ := segment["words"].([]any)
+		for _, rawWord := range words {
+			word, ok := rawWord.(map[string]any)
+			if !ok {
+				continue
+			}
+			delete(word, "meaning")
+			delete(word, "phonetic")
+		}
+	}
+}
+
+func translationStatus(translation, meaning, phonetic string) string {
+	if strings.TrimSpace(translation) != "" || strings.TrimSpace(meaning) != "" || strings.TrimSpace(phonetic) != "" {
+		return "translated"
+	}
+	return "pending"
+}
+
+func translationItemsFromContent(draftID string, page int, sourceVersion uint64, content map[string]any, modelID, provider string) ([]model.TextbookTranslationItem, error) {
+	segments, ok := content["segments"].([]any)
+	if !ok {
+		return nil, bad("页面缺少 segments")
+	}
+	items := make([]model.TextbookTranslationItem, 0)
+	for segmentIndex, rawSegment := range segments {
+		segment, ok := rawSegment.(map[string]any)
+		if !ok {
+			continue
+		}
+		segmentID, _ := segment["id"].(string)
+		segmentID = strings.TrimSpace(segmentID)
+		if segmentID == "" {
+			segmentID = fmt.Sprintf("p%d-s%d", page, segmentIndex)
+		}
+		sourceText, _ := segment["text"].(string)
+		translation, _ := segment["translation"].(string)
+		items = append(items, model.TextbookTranslationItem{
+			DraftID: draftID, Page: uint(page), ItemID: segmentID, SegmentID: segmentID,
+			ItemType: "sentence", WordIndex: 0, SourceText: sourceText,
+			Translation: strings.TrimSpace(translation), Meaning: "", Phonetic: "",
+			TranslationModel: modelID, Provider: provider,
+			Status: translationStatus(translation, "", ""), SourcePageVersion: sourceVersion, Revision: 1,
+		})
+		words, _ := segment["words"].([]any)
+		for wordIndex, rawWord := range words {
+			word, ok := rawWord.(map[string]any)
+			if !ok {
+				continue
+			}
+			wordID, _ := word["id"].(string)
+			wordID = strings.TrimSpace(wordID)
+			if wordID == "" {
+				wordID = fmt.Sprintf("%s-w%d", segmentID, wordIndex)
+			}
+			wordText, _ := word["text"].(string)
+			meaning, _ := word["meaning"].(string)
+			phonetic, _ := word["phonetic"].(string)
+			items = append(items, model.TextbookTranslationItem{
+				DraftID: draftID, Page: uint(page), ItemID: wordID, SegmentID: segmentID,
+				ItemType: "word", WordIndex: uint(wordIndex), SourceText: wordText,
+				Translation: "", Meaning: strings.TrimSpace(meaning), Phonetic: strings.TrimSpace(phonetic),
+				TranslationModel: modelID, Provider: provider,
+				Status: translationStatus("", meaning, phonetic), SourcePageVersion: sourceVersion, Revision: 1,
+			})
+		}
+	}
+	return items, nil
+}
+
+func syncTranslationItems(tx *gorm.DB, draftID string, page int, sourceVersion uint64, content map[string]any, modelID, provider string) error {
+	items, err := translationItemsFromContent(draftID, page, sourceVersion, content, modelID, provider)
+	if err != nil {
+		return err
+	}
+	if err := tx.Where("draft_id=? AND page=?", draftID, page).Delete(&model.TextbookTranslationItem{}).Error; err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return tx.Create(&items).Error
+}
+
+func (s *EditorService) hydrateTranslationItems(ctx context.Context, draftID string, page int, content map[string]any) error {
+	stripTranslationFields(content)
+	var items []model.TextbookTranslationItem
+	if err := s.db.WithContext(ctx).Where("draft_id=? AND page=?", draftID, page).Order("id").Find(&items).Error; err != nil {
+		return err
+	}
+	byID := make(map[string]model.TextbookTranslationItem, len(items))
+	for _, item := range items {
+		byID[item.ItemID] = item
+	}
+	segments, _ := content["segments"].([]any)
+	for _, rawSegment := range segments {
+		segment, ok := rawSegment.(map[string]any)
+		if !ok {
+			continue
+		}
+		segmentID, _ := segment["id"].(string)
+		if item, found := byID[segmentID]; found && item.ItemType == "sentence" {
+			segment["translation"] = item.Translation
+		} else {
+			segment["translation"] = ""
+		}
+		words, _ := segment["words"].([]any)
+		for _, rawWord := range words {
+			word, ok := rawWord.(map[string]any)
+			if !ok {
+				continue
+			}
+			wordID, _ := word["id"].(string)
+			if item, found := byID[wordID]; found && item.ItemType == "word" {
+				word["meaning"] = item.Meaning
+				word["phonetic"] = item.Phonetic
+			} else {
+				word["meaning"] = ""
+				word["phonetic"] = ""
+			}
+		}
+	}
+	return nil
+}
+
+func (s *EditorService) hydratedPageContent(ctx context.Context, draftID string, page int, raw string) (map[string]any, error) {
+	var content map[string]any
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateTranslationItems(ctx, draftID, page, content); err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
 // Keep draft uploads aligned with the canonical resource book_id protocol.
 // In particular, underscore is valid (for example: grade_4_up).
 var draftBookID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,79}$`)
@@ -521,6 +685,9 @@ func (s *EditorService) Delete(ctx context.Context, id string, actor uint64) err
 		if e := tx.Where("draft_id=?", id).Delete(&model.TextbookAudioItem{}).Error; e != nil {
 			return e
 		}
+		if e := tx.Where("draft_id=?", id).Delete(&model.TextbookTranslationItem{}).Error; e != nil {
+			return e
+		}
 		if e := tx.Where("draft_id=?", id).Delete(&model.TextbookDraftPage{}).Error; e != nil {
 			return e
 		}
@@ -541,8 +708,8 @@ func (s *EditorService) Page(ctx context.Context, id string, pos int) (DraftPage
 	if e := s.db.WithContext(ctx).Where("draft_id=? AND position=?", id, pos).First(&p).Error; e != nil {
 		return DraftPageView{}, e
 	}
-	var content map[string]any
-	if e := json.Unmarshal([]byte(p.Content), &content); e != nil {
+	content, e := s.hydratedPageContent(ctx, id, pos, p.Content)
+	if e != nil {
 		return DraftPageView{}, e
 	}
 	audioReady := !hasAudioItems(p.Content)
@@ -716,15 +883,23 @@ func samePageContentExceptSegmentOrder(stored, incoming map[string]any) bool {
 
 func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input DraftPageView, actor uint64) error {
 	normalizeContentAnchors(input.Content)
-	raw, e := json.Marshal(input.Content)
+	if _, ok := input.Content["segments"].([]any); !ok {
+		return bad("页面缺少 segments")
+	}
+	if (input.Checked || input.AudioChecked) && len(publicationIssues(input.Content)) > 0 {
+		return bad("页面仍有待完成内容")
+	}
+	storageContent, e := clonePageContent(input.Content)
+	if e != nil {
+		return bad("页面 JSON 无效")
+	}
+	stripTranslationFields(storageContent)
+	raw, e := json.Marshal(storageContent)
 	if e != nil {
 		return bad("页面 JSON 无效")
 	}
 	if len(raw) > 4<<20 {
 		return bad("页面内容过大")
-	}
-	if _, ok := input.Content["segments"].([]any); !ok {
-		return bad("页面缺少 segments")
 	}
 	if e := s.ensureDraftAudioState(ctx, id); e != nil {
 		return e
@@ -752,9 +927,10 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 		generationChanged := true
 		var stored map[string]any
 		if e := json.Unmarshal([]byte(p.Content), &stored); e == nil {
+			stripTranslationFields(stored)
 			storedRaw, marshalErr := json.Marshal(stored)
 			changed = marshalErr != nil || !bytes.Equal(storedRaw, raw)
-			generationChanged = changed && !samePageContentExceptSegmentOrder(stored, input.Content)
+			generationChanged = changed && !samePageContentExceptSegmentOrder(stored, storageContent)
 		}
 		// Text, IDs, coordinates, or word edits invalidate prior OCR/audio
 		// approval. Reordering otherwise-identical segments only changes reading
@@ -762,9 +938,6 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 		if generationChanged {
 			input.Checked = false
 			input.AudioChecked = false
-		}
-		if (input.Checked || input.AudioChecked) && len(publicationIssues(input.Content)) > 0 {
-			return bad("页面仍有待完成内容")
 		}
 		// Cover images and separator pages can contain no OCR segments. They
 		// have nothing to synthesize and may be approved without audio files.
@@ -794,6 +967,17 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 			pageUpdates["ocr_model"] = p.OCRModel
 		}
 		if e := tx.Model(&p).Updates(pageUpdates).Error; e != nil {
+			return e
+		}
+		translationModel := p.TranslationModel
+		if translationModel == "" {
+			translationModel = pageTranslationSettings(d, p).TranslationModel
+		}
+		provider := ""
+		if translationInfo, ok := ai.Find(translationModel); ok {
+			provider = translationInfo.Provider
+		}
+		if e := syncTranslationItems(tx, id, pos, p.Version+1, input.Content, translationModel, provider); e != nil {
 			return e
 		}
 		if generationChanged {
