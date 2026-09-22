@@ -2336,95 +2336,47 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	if ai.IsLocalTranslation(modelID) {
 		return s.translateLocalItems(ctx, job, d, current, modelID)
 	}
+	return s.translateCloudItems(ctx, job, d, current, work, modelID)
 
-	if e := os.MkdirAll(work, 0750); e != nil {
-		return e
-	}
-	input := filepath.Join(work, fmt.Sprintf("translate-page-%03d-input.json", page))
-	output := filepath.Join(work, fmt.Sprintf("translate-page-%03d-output.json", page))
-	defer os.Remove(input)
-	defer os.Remove(output)
-	translationInput, e := s.hydratedPageContent(ctx, d.ID, page, current.Content)
-	if e != nil {
-		return e
-	}
-	translationRaw, e := json.Marshal(translationInput)
-	if e != nil {
-		return e
-	}
-	if e := os.WriteFile(input, translationRaw, 0640); e != nil {
-		return e
-	}
 
-	// Cloud translation keeps the existing whole-page structured flow.
-	s.stopTranslationDaemon()
-	cmd := exec.CommandContext(
-		ctx,
-		s.cfg.Python,
-		filepath.Join("scripts", "translate_page.py"),
-		"--input", input,
-		"--output", output,
-		"--model-id", modelID,
-	)
-	cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
-	cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
-	stdout, e := cmd.StdoutPipe()
-	if e != nil {
-		return e
-	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	job.Progress, job.Total = 0, 2
-	s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
-	if e := cmd.Start(); e != nil {
-		return e
-	}
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		var event struct {
-			Event    string `json:"event"`
-			Stage    string `json:"stage"`
-			Progress int    `json:"progress"`
-			Total    int    `json:"total"`
-		}
-		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "progress" || event.Total <= 0 {
-			continue
-		}
-		job.Progress, job.Total = event.Progress, event.Total
-		s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
-	}
-	if e := scanner.Err(); e != nil {
-		_ = cmd.Process.Kill()
-		return e
-	}
-	if e := cmd.Wait(); e != nil {
-		return fmt.Errorf("translate: %w: %s", e, strings.TrimSpace(stderr.String()))
-	}
+type cloudTranslationPayload struct { Sentences []string `json:"sentences"`; Words []string `json:"words"` }
+type cloudTranslationResult struct { Translations []string `json:"translations"`; Words [][]string `json:"words"` }
 
-	translated, e := os.ReadFile(output)
-	if e != nil {
-		return e
-	}
-	var translatedContent map[string]any
-	if e := json.Unmarshal(translated, &translatedContent); e != nil {
-		return fmt.Errorf("decode translated page: %w", e)
-	}
-	translationInfo, _ := ai.Find(modelID)
-	job.Progress, job.Total = 2, 2
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := syncTranslationItems(tx, d.ID, page, current.Version, translatedContent, modelID, translationInfo.Provider); e != nil {
-			return e
+func normalizeTranslationLookup(v string) string { return strings.Join(strings.Fields(strings.TrimSpace(v)), " ") }
+
+func (s *EditorService) translateCloudItems(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, current model.TextbookDraftPage, work, modelID string) error {
+	var items []model.TextbookTranslationItem
+	if err:=s.db.WithContext(ctx).Where("draft_id=? AND page=? AND item_type IN ? AND status IN ?",d.ID,current.Position,[]string{"sentence","word"},[]string{"pending","review_warning"}).Order("id ASC").Find(&items).Error;err!=nil{return err}
+	job.Progress,job.Total=0,len(items); _=s.db.Model(job).Updates(map[string]any{"progress":0,"total":len(items)}).Error
+	if len(items)==0{return nil}
+	provider:=""; if info,ok:=ai.Find(modelID);ok{provider=info.Provider}
+	misses:=make([]model.TextbookTranslationItem,0,len(items))
+	for _,item:=range items {
+		key:=normalizeTranslationLookup(item.SourceText); var cached model.TextbookTranslationItem
+		q:=s.db.WithContext(ctx).Where("item_type=? AND status='translated' AND id<>?",item.ItemType,item.ID)
+		if item.ItemType=="sentence"{q=q.Where("source_text=? AND translation IS NOT NULL AND translation<>''",key)}else{q=q.Where("source_text=? AND meaning<>'' AND phonetic<>''",key)}
+		err:=q.Order("updated_at DESC").First(&cached).Error
+		if err==nil{
+			u:=map[string]any{"status":"translated","failure_reason":nil,"revision":gorm.Expr("revision+1"),"translation_model":cached.TranslationModel,"provider":cached.Provider}
+			if item.ItemType=="sentence"{u["translation"]=cached.Translation}else{u["meaning"]=cached.Meaning;u["phonetic"]=cached.Phonetic}
+			if err=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",item.ID).Updates(u).Error;err!=nil{return err}
+			// Database reuse is already trusted: intentionally no local review.
+			job.Progress++; _=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error; continue
 		}
-		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{
-			"translation_model": modelID,
-			"checked":           false,
-			"audio_checked":     false,
-			"version":           gorm.Expr("version+1"),
-		}).Error; e != nil {
-			return e
-		}
-		return tx.Model(&model.TextbookDraft{}).Where("id=?", d.ID).Updates(map[string]any{"version": gorm.Expr("version+1")}).Error
-	})
+		if err!=nil&&!errors.Is(err,gorm.ErrRecordNotFound){return err}; misses=append(misses,item)
+	}
+	sentenceIDs:=map[string][]uint64{}; wordIDs:=map[string][]uint64{}; sentences:=[]string{}; words:=[]string{}
+	for _,item:=range misses{key:=normalizeTranslationLookup(item.SourceText);if item.ItemType=="sentence"{if _,ok:=sentenceIDs[key];!ok{sentences=append(sentences,key)};sentenceIDs[key]=append(sentenceIDs[key],item.ID)}else{if _,ok:=wordIDs[key];!ok{words=append(words,key)};wordIDs[key]=append(wordIDs[key],item.ID)}}
+	if len(sentences)>0||len(words)>0{
+		if err:=os.MkdirAll(work,0750);err!=nil{return err}; input:=filepath.Join(work,fmt.Sprintf("translate-items-%03d-input.json",current.Position)); output:=filepath.Join(work,fmt.Sprintf("translate-items-%03d-output.json",current.Position)); defer os.Remove(input);defer os.Remove(output)
+		raw,_:=json.Marshal(cloudTranslationPayload{Sentences:sentences,Words:words});if err:=os.WriteFile(input,raw,0640);err!=nil{return err}
+		cmd:=exec.CommandContext(ctx,s.cfg.Python,filepath.Join("scripts","translate_items_cloud.py"),"--input",input,"--output",output,"--model-id",modelID);cmd.Dir=filepath.Dir(filepath.Dir(s.cfg.ResourceRoot));cmd.Env=append(os.Environ(),"RESOURCE_ROOT="+work);var stderr strings.Builder;cmd.Stderr=&stderr;cmd.Stdout=os.Stdout
+		if err:=cmd.Run();err!=nil{return fmt.Errorf("translate items: %w: %s",err,strings.TrimSpace(stderr.String()))};outRaw,err:=os.ReadFile(output);if err!=nil{return err};var result cloudTranslationResult;if err=json.Unmarshal(outRaw,&result);err!=nil{return err};if len(result.Translations)!=len(sentences)||len(result.Words)!=len(words){return errors.New("cloud translation result count mismatch")}
+		for i,source:=range sentences{translation:=strings.TrimSpace(result.Translations[i]);if translation==""{return errors.New("empty cloud sentence translation")};for _,id:=range sentenceIDs[source]{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_sentence","text":source,"translation":translation,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");status,reason:="translated","";if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}};u:=map[string]any{"translation":translation,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
+		for i,source:=range words{row:=result.Words[i];if len(row)!=2||strings.TrimSpace(row[0])==""||strings.TrimSpace(row[1])==""{return errors.New("incomplete cloud word translation")};meaning,phonetic:=strings.TrimSpace(row[0]),strings.TrimSpace(row[1]);for _,id:=range wordIDs[source]{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_word","text":source,"meaning":meaning,"phonetic":phonetic,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");status,reason:="translated","";if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}};u:=map[string]any{"meaning":meaning,"phonetic":phonetic,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
+	}
+	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?",d.ID,current.Position).Updates(map[string]any{"translation_model":modelID,"checked":false,"audio_checked":false,"version":gorm.Expr("version+1")}).Error;err!=nil{return err}
+	return s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?",d.ID).Update("version",gorm.Expr("version+1")).Error
 }
 
 type localTranslationResponse struct {
@@ -2436,6 +2388,8 @@ type localTranslationResponse struct {
 	Error       string `json:"error"`
 	ErrorType   string `json:"error_type"`
 	Recoverable bool   `json:"recoverable"`
+	Passed      bool   `json:"passed"`
+	Reason      string `json:"reason"`
 }
 
 type localTranslationItemError struct {
@@ -2621,6 +2575,7 @@ func (s *EditorService) runLocalTranslationItem(ctx context.Context, request map
 			}
 			return response, errors.New(message)
 		}
+		if response.Task == "review_sentence" || response.Task == "review_word" { return response, nil }
 		if response.Task == "sentence" {
 			if strings.TrimSpace(response.Translation) == "" {
 				return response, errors.New("local sentence translation is empty")
