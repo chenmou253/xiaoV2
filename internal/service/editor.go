@@ -2438,6 +2438,12 @@ type localTranslationResponse struct {
 	Recoverable bool   `json:"recoverable"`
 }
 
+type localTranslationItemError struct {
+	Message string
+}
+
+func (e localTranslationItemError) Error() string { return e.Message }
+
 func (s *EditorService) translateLocalItems(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, current model.TextbookDraftPage, modelID string) error {
 	var items []model.TextbookTranslationItem
 	if e := s.db.WithContext(ctx).
@@ -2484,7 +2490,11 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 
 		response, err := s.runLocalTranslationItem(ctx, request, modelID)
 		if err != nil {
-			if markErr := s.markLocalTranslationIssue(ctx, item.ID, modelID, provider, err.Error()); markErr != nil {
+			var itemErr localTranslationItemError
+			if !errors.As(err, &itemErr) {
+				return err
+			}
+			if markErr := s.markLocalTranslationIssue(ctx, item.ID, modelID, provider, itemErr.Error()); markErr != nil {
 				return errors.Join(err, markErr)
 			}
 			issues++
@@ -2608,7 +2618,11 @@ func (s *EditorService) runLocalTranslationItem(ctx context.Context, request map
 			continue
 		}
 		if response.Error != "" {
-			return response, fmt.Errorf("%s: %s", response.ErrorType, response.Error)
+			message := strings.TrimSpace(response.ErrorType + ": " + response.Error)
+			if response.Recoverable {
+				return response, localTranslationItemError{Message: message}
+			}
+			return response, errors.New(message)
 		}
 		if response.Task == "sentence" {
 			if strings.TrimSpace(response.Translation) == "" {
