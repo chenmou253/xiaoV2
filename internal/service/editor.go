@@ -1090,9 +1090,17 @@ func (s *EditorService) Reorder(ctx context.Context, id string, positions []int,
 			}
 			delete(byPos, p)
 		}
-		tx.Model(&model.TextbookDraftPage{}).Where("draft_id=?", id).Update("position", gorm.Expr("position+1000000"))
+		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=?", id).Update("position", gorm.Expr("position+1000000")).Error; e != nil {
+			return e
+		}
+		if e := tx.Model(&model.TextbookTranslationItem{}).Where("draft_id=?", id).Update("page", gorm.Expr("page+1000000")).Error; e != nil {
+			return e
+		}
 		for i, old := range positions {
 			if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, old+1000000).Updates(map[string]any{"position": i + 1, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+				return e
+			}
+			if e := tx.Model(&model.TextbookTranslationItem{}).Where("draft_id=? AND page=?", id, old+1000000).Update("page", i+1).Error; e != nil {
 				return e
 			}
 		}
@@ -1100,17 +1108,17 @@ func (s *EditorService) Reorder(ctx context.Context, id string, positions []int,
 		return editorAudit(tx, actor, "draft.reorder", id, positions)
 	})
 }
-func pageTextReviewIssues(raw string) []string {
-	var content map[string]any
-	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+func (s *EditorService) pageTextReviewIssues(ctx context.Context, draftID string, page int, raw string) []string {
+	content, err := s.hydratedPageContent(ctx, draftID, page, raw)
+	if err != nil {
 		return []string{"页面 JSON 无效"}
 	}
 	return publicationIssues(content)
 }
 
-func pageAudioRegenerationIssues(raw string) []string {
-	var content map[string]any
-	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+func (s *EditorService) pageAudioRegenerationIssues(ctx context.Context, draftID string, page int, raw string) []string {
+	content, err := s.hydratedPageContent(ctx, draftID, page, raw)
+	if err != nil {
 		return []string{"页面 JSON 无效"}
 	}
 	issues := publicationIssues(content)
@@ -1155,9 +1163,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				return bad(fmt.Sprintf("PDF 共 %d 页，尚未生成完毕", d.SourcePageCount))
 			}
 			for _, p := range pages {
-				var c map[string]any
-				_ = json.Unmarshal([]byte(p.Content), &c)
-				if !p.Checked || !p.AudioChecked || len(publicationIssues(c)) > 0 || s.missingDraftAudio(d, p) {
+				if !p.Checked || !p.AudioChecked || len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || s.missingDraftAudio(d, p) {
 					return bad(fmt.Sprintf("第%d页尚未完成正文或音频确认", p.Position))
 				}
 			}
@@ -1194,7 +1200,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 				return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 			}
-			if issues := pageTextReviewIssues(current.Content); len(issues) > 0 {
+			if issues := s.pageTextReviewIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
 				return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", page, strings.Join(issues, "；")))
 			}
 			updates := map[string]any{
@@ -1245,6 +1251,9 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			}).Error; e != nil {
 				return e
 			}
+			if e := tx.Where("draft_id=? AND page=?", id, page).Delete(&model.TextbookTranslationItem{}).Error; e != nil {
+				return e
+			}
 			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: "ocr", Page: page, Status: "queued", Total: d.SourcePageCount}).Error; e != nil {
 				return e
 			}
@@ -1277,7 +1286,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if !current.Checked {
 				return bad(fmt.Sprintf("请先确认第 %d 页正文，再生成音频", current.Position))
 			}
-			if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+			if issues := s.pageAudioRegenerationIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
 				return bad(fmt.Sprintf("第 %d 页暂不能生成音频：%s", current.Position, strings.Join(issues, "；")))
 			}
 			if !s.missingDraftAudio(d, current) {
@@ -1308,7 +1317,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 				return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 			}
-			if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+			if issues := s.pageAudioRegenerationIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
 				return bad(fmt.Sprintf("第 %d 页暂不能重新生成音频：%s", current.Position, strings.Join(issues, "；")))
 			}
 			var active int64
@@ -1360,7 +1369,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				pending := 0
 				for index := range pages {
 					p := &pages[index]
-					if !p.Checked || len(pageTextReviewIssues(p.Content)) > 0 || !hasAudioItems(p.Content) {
+					if !p.Checked || len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || !hasAudioItems(p.Content) {
 						continue
 					}
 					if s.missingDraftAudio(d, *p) {
@@ -1441,7 +1450,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if !current.Checked {
 				return bad(fmt.Sprintf("请先确认第 %d 页正文", current.Position))
 			}
-			if issues := pageTextReviewIssues(current.Content); len(issues) > 0 {
+			if issues := s.pageTextReviewIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
 				return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", current.Position, strings.Join(issues, "；")))
 			}
 			nextPage := current.Position + 1
@@ -1636,7 +1645,15 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 			return e
 		}
 		contentRel := fmt.Sprintf("metadata/pages/page-%03d.json", p.Position)
-		if e = os.WriteFile(filepath.Join(bookRoot, filepath.FromSlash(contentRel)), []byte(p.Content), 0640); e != nil {
+		publishedContent, contentErr := s.hydratedPageContent(tx.Statement.Context, d.ID, p.Position, p.Content)
+		if contentErr != nil {
+			return contentErr
+		}
+		publishedRaw, contentErr := json.MarshalIndent(publishedContent, "", "  ")
+		if contentErr != nil {
+			return contentErr
+		}
+		if e = os.WriteFile(filepath.Join(bookRoot, filepath.FromSlash(contentRel)), append(publishedRaw, '\n'), 0640); e != nil {
 			return e
 		}
 		newPages = append(newPages, model.BookPage{BookID: d.BookID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: imageRel, ContentPath: contentRel, Interactive: hasSegments(p.Content), Preview: p.Preview})
@@ -2019,7 +2036,7 @@ func (s *EditorService) runBookAudioJob(ctx context.Context, job *model.Textbook
 	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(pages)})
 	errorsFound := make([]string, 0)
 	for index, page := range pages {
-		if job.Kind == "audio-missing" && (!page.Checked || len(pageTextReviewIssues(page.Content)) > 0) {
+		if job.Kind == "audio-missing" && (!page.Checked || len(s.pageTextReviewIssues(ctx, d.ID, page.Position, page.Content)) > 0) {
 			job.Progress = index + 1
 			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
 			continue
@@ -2032,7 +2049,15 @@ func (s *EditorService) runBookAudioJob(ctx context.Context, job *model.Textbook
 		if e := os.MkdirAll(metadata, 0750); e != nil {
 			return e
 		}
-		if e := os.WriteFile(filepath.Join(metadata, fmt.Sprintf("page-%03d.json", page.Position)), []byte(page.Content), 0640); e != nil {
+		audioContent, contentErr := s.hydratedPageContent(ctx, d.ID, page.Position, page.Content)
+		if contentErr != nil {
+			return contentErr
+		}
+		audioRaw, contentErr := json.Marshal(audioContent)
+		if contentErr != nil {
+			return contentErr
+		}
+		if e := os.WriteFile(filepath.Join(metadata, fmt.Sprintf("page-%03d.json", page.Position)), audioRaw, 0640); e != nil {
 			return e
 		}
 		mode := "missing"
@@ -2272,7 +2297,15 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	output := filepath.Join(work, fmt.Sprintf("translate-page-%03d-output.json", page))
 	defer os.Remove(input)
 	defer os.Remove(output)
-	if e := os.WriteFile(input, []byte(current.Content), 0640); e != nil {
+	translationInput, e := s.hydratedPageContent(ctx, d.ID, page, current.Content)
+	if e != nil {
+		return e
+	}
+	translationRaw, e := json.Marshal(translationInput)
+	if e != nil {
+		return e
+	}
+	if e := os.WriteFile(input, translationRaw, 0640); e != nil {
 		return e
 	}
 
@@ -2336,10 +2369,17 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	if e != nil {
 		return e
 	}
+	var translatedContent map[string]any
+	if e := json.Unmarshal(translated, &translatedContent); e != nil {
+		return fmt.Errorf("decode translated page: %w", e)
+	}
+	translationInfo, _ := ai.Find(modelID)
 	job.Progress, job.Total = 2, 2
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if e := syncTranslationItems(tx, d.ID, page, current.Version, translatedContent, modelID, translationInfo.Provider); e != nil {
+			return e
+		}
 		if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, page).Updates(map[string]any{
-			"content":           string(translated),
 			"translation_model": modelID,
 			"checked":           false,
 			"audio_checked":     false,
