@@ -40,7 +40,7 @@ WORD_SCHEMA: dict[str, Any] = {
 }
 
 def call(client: OnlineLLMClient, system: str, payload: dict[str, Any], schema: dict[str, Any], name: str, max_tokens: int) -> dict[str, Any]:
-    raw = client.generate(
+    raw = client.generate_structured(
         system,
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         max_tokens,
