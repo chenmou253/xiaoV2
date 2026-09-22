@@ -11,6 +11,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"xiaov2/internal/ai"
 	"xiaov2/internal/model"
 )
 
@@ -246,7 +247,12 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 		ocr["model"] = "manual-review"
 	}
 
-	dbRaw, err := json.Marshal(content)
+	storageContent, err := clonePageContent(content)
+	if err != nil {
+		return ImportPageJSONResult{}, err
+	}
+	stripTranslationFields(storageContent)
+	dbRaw, err := json.Marshal(storageContent)
 	if err != nil {
 		return ImportPageJSONResult{}, err
 	}
@@ -268,7 +274,7 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 	if err := atomicWriteJSON(ocrTarget, ocr); err != nil {
 		return ImportPageJSONResult{}, fmt.Errorf("write OCR JSON: %w", err)
 	}
-	if err := atomicWriteJSON(contentTarget, content); err != nil {
+	if err := atomicWriteJSON(contentTarget, storageContent); err != nil {
 		_ = restoreFile(ocrTarget, oldOCR, oldOCRExists)
 		return ImportPageJSONResult{}, fmt.Errorf("write content JSON: %w", err)
 	}
@@ -307,6 +313,10 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 			"tts_voice":     settings.TTSVoice,
 			"version":       gorm.Expr("version+1"),
 		}).Error; err != nil {
+			return err
+		}
+		translationInfo, _ := ai.Find(settings.TranslationModel)
+		if err := syncTranslationItems(tx, draft.ID, page, current.Version+1, content, settings.TranslationModel, translationInfo.Provider); err != nil {
 			return err
 		}
 		current.Content = string(dbRaw)
