@@ -5,6 +5,8 @@ import types
 import unittest
 from unittest import mock
 
+from translation_daemon import LocalItemValidationError, parse_sentence_result, parse_word_result
+
 from translate_page import (
     BATCH_REVIEW_SCHEMA,
     BATCH_TRANSLATION_SCHEMA,
@@ -53,6 +55,20 @@ def approved(translation, score=0.98):
 
 
 class TranslationTests(unittest.TestCase):
+    def test_local_daemon_sentence_result_is_plain_text_not_json(self):
+        self.assertEqual(parse_sentence_result("我看见一家医院。"), "我看见一家医院。")
+        with self.assertRaises(LocalItemValidationError):
+            parse_sentence_result("翻译：\n我看见一家医院。")
+
+    def test_local_daemon_word_result_requires_exactly_two_lines(self):
+        meaning, phonetic = parse_word_result("医院\n/ˈhɑːspɪtl/", "hospital")
+        self.assertEqual(meaning, "医院")
+        self.assertEqual(phonetic, "ˈhɑːspɪtl")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("医院", "hospital")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("医院\nhospital", "hospital")
+
     def test_translation_completion_budget_defaults_to_qwen_max_and_is_configurable(self):
         from translate_page import configured_translation_completion_tokens
 
