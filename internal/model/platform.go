@@ -152,11 +152,11 @@ type TextbookDraftPage struct {
 type TextbookTranslationItem struct {
 	ID                uint64     `gorm:"primaryKey" json:"id"`
 	DraftID           string     `gorm:"size:36;not null;uniqueIndex:uk_translation_item,priority:1;index:idx_translation_page,priority:1;index:idx_translation_segment,priority:1;index:idx_translation_status,priority:1;index:idx_translation_type,priority:1" json:"draft_id"`
-	Page              uint       `gorm:"not null;default:0;uniqueIndex:uk_translation_item,priority:2;index:idx_translation_page,priority:2;index:idx_translation_segment,priority:2;index:idx_translation_status,priority:2;index:idx_translation_type,priority:2" json:"page"`
+	Page              uint32     `gorm:"type:int unsigned;not null;default:0;uniqueIndex:uk_translation_item,priority:2;index:idx_translation_page,priority:2;index:idx_translation_segment,priority:2;index:idx_translation_status,priority:2;index:idx_translation_type,priority:2" json:"page"`
 	ItemID            string     `gorm:"size:191;not null;default:'';uniqueIndex:uk_translation_item,priority:3" json:"item_id"`
 	SegmentID         string     `gorm:"size:191;not null;default:'';index:idx_translation_segment,priority:3" json:"segment_id"`
 	ItemType          string     `gorm:"size:16;not null;default:'';index:idx_translation_type,priority:3" json:"item_type"`
-	WordIndex         uint       `gorm:"not null;default:0" json:"word_index"`
+	WordIndex         uint32     `gorm:"type:int unsigned;not null;default:0" json:"word_index"`
 	SourceText        string     `gorm:"type:text;not null" json:"source_text"`
 	Translation       string     `gorm:"type:text" json:"translation"`
 	Meaning           string     `gorm:"size:100;not null;default:''" json:"meaning"`
