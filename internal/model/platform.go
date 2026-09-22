@@ -158,13 +158,13 @@ type TextbookTranslationItem struct {
 	ItemType          string     `gorm:"size:16;not null;default:'';index:idx_translation_type,priority:3" json:"item_type"`
 	WordIndex         uint32     `gorm:"type:int unsigned;not null;default:0" json:"word_index"`
 	SourceText        string     `gorm:"type:text;not null" json:"source_text"`
-	Translation       string     `gorm:"type:text" json:"translation"`
+	Translation       *string    `gorm:"type:text" json:"translation,omitempty"`
 	Meaning           string     `gorm:"size:100;not null;default:''" json:"meaning"`
 	Phonetic          string     `gorm:"size:191;not null;default:''" json:"phonetic"`
 	TranslationModel  string     `gorm:"size:96;not null;default:''" json:"translation_model"`
 	Provider          string     `gorm:"size:32;not null;default:''" json:"provider"`
 	Status            string     `gorm:"size:32;not null;default:'pending';index:idx_translation_status,priority:3" json:"status"`
-	FailureReason     string     `gorm:"type:text" json:"failure_reason"`
+	FailureReason     *string    `gorm:"type:text" json:"failure_reason,omitempty"`
 	SourcePageVersion uint64     `gorm:"not null;default:1" json:"source_page_version"`
 	Revision          uint64     `gorm:"not null;default:1" json:"revision"`
 	ReviewedBy        uint64     `gorm:"not null;default:0" json:"reviewed_by"`
