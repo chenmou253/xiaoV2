@@ -74,6 +74,15 @@ class TranslationTests(unittest.TestCase):
             parse_word_result("这些礼物是给你的。\nfɔːr", "for")
         self.assertEqual(parse_word_result("给\nfɔːr", "for"), ("给", "fɔːr"))
 
+    def test_local_daemon_rejects_non_ipa_word_phonetics(self):
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nr'listen", "listen")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nr:listen", "listen")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nlisten", "listen")
+        self.assertEqual(parse_word_result("听\nˈlɪsən", "listen"), ("听", "ˈlɪsən"))
+
     def test_translation_completion_budget_defaults_to_qwen_max_and_is_configurable(self):
         from translate_page import configured_translation_completion_tokens
 
