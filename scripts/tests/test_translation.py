@@ -69,6 +69,11 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaises(LocalItemValidationError):
             parse_word_result("医院\nhospital", "hospital")
 
+    def test_local_daemon_rejects_sentence_translation_as_word_meaning(self):
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("这些礼物是给你的。\nfɔːr", "for")
+        self.assertEqual(parse_word_result("给\nfɔːr", "for"), ("给", "fɔːr"))
+
     def test_translation_completion_budget_defaults_to_qwen_max_and_is_configurable(self):
         from translate_page import configured_translation_completion_tokens
 
