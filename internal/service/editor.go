@@ -77,6 +77,15 @@ type daemonScanResult struct {
 	err  error
 }
 
+type localTranslationIssuesError struct {
+	Count int
+}
+
+func (e localTranslationIssuesError) Error() string {
+	return fmt.Sprintf("%d 条本地翻译结果需要人工审核", e.Count)
+}
+
+
 func scanDaemonLine(ctx context.Context, scanner *bufio.Scanner, stop func(), name string) ([]byte, error) {
 	result := make(chan daemonScanResult, 1)
 	go func() {
@@ -1910,6 +1919,10 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 	msg := ""
 	if runErr != nil {
 		status, ds, msg = "failed", "failed", runErr.Error()
+		var localIssues localTranslationIssuesError
+		if errors.As(runErr, &localIssues) {
+			status, ds = "issues", "draft"
+		}
 		// Audio QA failures are recoverable per item. Keep the draft editable
 		// and expose the unresolved entries in the dedicated review screen.
 		if strings.HasPrefix(job.Kind, "audio") {
@@ -2515,7 +2528,7 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 		return e
 	}
 	if issues > 0 {
-		return fmt.Errorf("%d 条本地翻译结果需要人工审核", issues)
+		return localTranslationIssuesError{Count: issues}
 	}
 	return nil
 }
