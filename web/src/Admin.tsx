@@ -1857,23 +1857,69 @@ function Drafts({
           </div>
           {detail.pages.length > 0 && (
             <div className="draft-grid">
-              <aside>
-                {detail.pages.map((item: Row) => (
-                  <div key={item.position}>
-                    <button
-                      className={item.position === pageNo ? "active" : ""}
-                      onClick={() => setPageNo(item.position)}
-                    >
-                      第 {item.position} 页{" "}
-                      {!item.checked
-                        ? "文字待审核"
-                        : item.audio_checked
-                          ? "✓ 全部完成"
-                          : "✓ 文字已确认 · 音频待处理"}
-                    </button>
-                    <small className="draft-page-model">{item.checked ? "文字已锁定" : "文字未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
-                  </div>
-                ))}
+              <aside className="draft-page-sidebar">
+                <div className="draft-page-toolbar">
+                  <strong>页面</strong>
+                  <select
+                    aria-label="筛选页面状态"
+                    defaultValue="all"
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      document.querySelectorAll<HTMLElement>(".draft-page-row").forEach((row) => {
+                        row.hidden = value !== "all" && row.dataset.status !== value;
+                      });
+                    }}
+                  >
+                    <option value="all">全部 {detail.pages.length}</option>
+                    <option value="pending">待处理</option>
+                    <option value="done">已完成</option>
+                  </select>
+                  <input
+                    className="draft-page-jump"
+                    type="number"
+                    min={1}
+                    max={Math.max(...detail.pages.map((item: Row) => item.position))}
+                    placeholder="页码"
+                    aria-label="跳转页码"
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      const next = Number(e.currentTarget.value);
+                      if (detail.pages.some((item: Row) => item.position === next)) setPageNo(next);
+                    }}
+                  />
+                </div>
+                <div className="draft-page-list">
+                  {detail.pages.map((item: Row) => {
+                    const done = Boolean(item.checked && item.audio_checked);
+                    return (
+                      <button
+                        key={item.position}
+                        data-status={done ? "done" : "pending"}
+                        className={`draft-page-row ${item.position === pageNo ? "active" : ""}`}
+                        onClick={() => setPageNo(item.position)}
+                        title={`${item.checked ? "文字已锁定" : "文字未锁定"} · ${item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / ${item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")} / ${item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}`}
+                      >
+                        <span>第 {item.position} 页</span>
+                        <small>
+                          {!item.checked
+                            ? "文字待审核"
+                            : item.audio_checked
+                              ? "✓ 完成"
+                              : "音频待处理"}
+                        </small>
+                      </button>
+                    );
+                  })}
+                </div>
+                {detail.pages.find((item: Row) => item.position === pageNo) && (() => {
+                  const item = detail.pages.find((entry: Row) => entry.position === pageNo)!;
+                  return <div className="draft-page-detail">
+                    <strong>第 {item.position} 页详情</strong>
+                    <small>OCR：{item.ocr_model || detail.draft.ocr_model || "local-paddleocr"}</small>
+                    <small>翻译：{item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")}</small>
+                    <small>TTS：{item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
+                  </div>;
+                })()}
               </aside>
               {page && (
                 <div>
