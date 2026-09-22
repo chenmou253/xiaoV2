@@ -590,8 +590,25 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 			if e != nil {
 				return e
 			}
-			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(raw), Preview: p.Preview, Checked: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
+			var publishedContent map[string]any
+			if e := json.Unmarshal(raw, &publishedContent); e != nil {
+				return e
+			}
+			storageContent, e := clonePageContent(publishedContent)
+			if e != nil {
+				return e
+			}
+			stripTranslationFields(storageContent)
+			storageRaw, e := json.Marshal(storageContent)
+			if e != nil {
+				return e
+			}
+			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(storageRaw), Preview: p.Preview, Checked: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
 			if e = tx.Create(&dp).Error; e != nil {
+				return e
+			}
+			translationInfo, _ := ai.Find(models.TranslationModel)
+			if e = syncTranslationItems(tx, id, p.Position, 1, publishedContent, models.TranslationModel, translationInfo.Provider); e != nil {
 				return e
 			}
 		}
@@ -600,11 +617,11 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 			return e
 		}
 		for _, p := range pages {
-			path, pathErr := s.resources.Resolve(book, p.ContentPath)
-			if pathErr != nil {
-				return pathErr
+			var copied model.TextbookDraftPage
+			if e := tx.Where("draft_id=? AND position=?", id, p.Position).First(&copied).Error; e != nil {
+				return e
 			}
-			if e := copyFile(path, filepath.Join(workBook, "metadata", "pages", fmt.Sprintf("page-%03d.json", p.Position))); e != nil {
+			if e := os.WriteFile(filepath.Join(workBook, "metadata", "pages", fmt.Sprintf("page-%03d.json", p.Position)), []byte(copied.Content), 0640); e != nil {
 				return e
 			}
 		}
@@ -2602,11 +2619,28 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(content), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TranslationModel: draftModelSettings(d).TranslationModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
+			var displayContent map[string]any
+			if e := json.Unmarshal(content, &displayContent); e != nil {
+				return e
+			}
+			storageContent, e := clonePageContent(displayContent)
+			if e != nil {
+				return e
+			}
+			stripTranslationFields(storageContent)
+			storageRaw, e := json.Marshal(storageContent)
+			if e != nil {
+				return e
+			}
+			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(storageRaw), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TranslationModel: draftModelSettings(d).TranslationModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
 			var existing model.TextbookDraftPage
 			e = tx.Where("draft_id=? AND position=?", d.ID, p.Position).First(&existing).Error
 			if errors.Is(e, gorm.ErrRecordNotFound) {
 				if e = tx.Create(&page).Error; e != nil {
+					return e
+				}
+				translationInfo, _ := ai.Find(page.TranslationModel)
+				if e = syncTranslationItems(tx, d.ID, p.Position, 1, displayContent, page.TranslationModel, translationInfo.Provider); e != nil {
 					return e
 				}
 				if e = s.syncPageAudioState(tx, d, page, true); e != nil {
@@ -2621,6 +2655,10 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 				return e
 			}
 			page.ID, page.Version = existing.ID, existing.Version+1
+			translationInfo, _ := ai.Find(page.TranslationModel)
+			if e = syncTranslationItems(tx, d.ID, p.Position, page.Version, displayContent, page.TranslationModel, translationInfo.Provider); e != nil {
+				return e
+			}
 			if e = s.syncPageAudioState(tx, d, page, true); e != nil {
 				return e
 			}
