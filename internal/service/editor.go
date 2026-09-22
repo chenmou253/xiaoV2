@@ -329,7 +329,7 @@ func translationItemsFromContent(draftID string, page int, sourceVersion uint64,
 		sourceText, _ := segment["text"].(string)
 		translation, _ := segment["translation"].(string)
 		items = append(items, model.TextbookTranslationItem{
-			DraftID: draftID, Page: uint(page), ItemID: segmentID, SegmentID: segmentID,
+			DraftID: draftID, Page: uint32(page), ItemID: segmentID, SegmentID: segmentID,
 			ItemType: "sentence", WordIndex: 0, SourceText: sourceText,
 			Translation: strings.TrimSpace(translation), Meaning: "", Phonetic: "",
 			TranslationModel: modelID, Provider: provider,
@@ -350,8 +350,8 @@ func translationItemsFromContent(draftID string, page int, sourceVersion uint64,
 			meaning, _ := word["meaning"].(string)
 			phonetic, _ := word["phonetic"].(string)
 			items = append(items, model.TextbookTranslationItem{
-				DraftID: draftID, Page: uint(page), ItemID: wordID, SegmentID: segmentID,
-				ItemType: "word", WordIndex: uint(wordIndex), SourceText: wordText,
+				DraftID: draftID, Page: uint32(page), ItemID: wordID, SegmentID: segmentID,
+				ItemType: "word", WordIndex: uint32(wordIndex), SourceText: wordText,
 				Translation: "", Meaning: strings.TrimSpace(meaning), Phonetic: strings.TrimSpace(phonetic),
 				TranslationModel: modelID, Provider: provider,
 				Status: translationStatus("", meaning, phonetic), SourcePageVersion: sourceVersion, Revision: 1,
