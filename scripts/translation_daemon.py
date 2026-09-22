@@ -62,6 +62,15 @@ hospital
 ˈhɑːspɪtl
 """
 
+
+REVIEW_SENTENCE_SYSTEM_PROMPT = """Review an English textbook sentence translation for primary-school students.
+Return exactly one line: PASS if it is accurate and natural, otherwise WARNING followed by a short reason.
+Check omissions, additions, mistranslation, names, numbers and negation. Do not rewrite correct text."""
+
+REVIEW_WORD_SYSTEM_PROMPT = """Review one English word's Chinese dictionary meaning and General American IPA independently, without sentence context.
+Return exactly one line: PASS if both are acceptable, otherwise WARNING followed by a short reason.
+Check that the Chinese meaning is concise and that IPA is General American, rhotic, and has appropriate lexical stress."""
+
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 MEANING_LABEL_RE = re.compile(r"^(?:meaning|chinese meaning|词义|中文词义)\s*[:：]\s*", re.IGNORECASE)
 PHONETIC_LABEL_RE = re.compile(r"^(?:phonetic|ipa|音标)\s*[:：]\s*", re.IGNORECASE)
@@ -164,7 +173,7 @@ def main() -> None:
 
             task = str(request.get("task", "")).strip()
             text = normalize_source_text(request.get("text", ""))
-            if task not in {"sentence", "word"}:
+            if task not in {"sentence", "word", "review_sentence", "review_word"}:
                 raise ValueError(f"unsupported local translation task: {task}")
             if not text:
                 raise ValueError("local translation request text is empty")
@@ -179,6 +188,29 @@ def main() -> None:
                 )
                 backend = LocalMLXBackend()
                 loaded_model = model_id
+
+            if task == "review_sentence":
+                candidate = str(request.get("translation", "")).strip()
+                if not candidate:
+                    raise ValueError("review sentence candidate is empty")
+                backend.set_operation("本地句子审核", request_type="sentence_review")
+                result = backend.generate(REVIEW_SENTENCE_SYSTEM_PROMPT, text + "\n" + candidate, 96)
+                line = " ".join(_content_lines(result)).strip()
+                passed = line.upper().startswith("PASS")
+                print(json.dumps({"done": True, "task": task, "passed": passed, "reason": "" if passed else line[:500], "model_id": model_id}, ensure_ascii=False), flush=True)
+                continue
+
+            if task == "review_word":
+                meaning = str(request.get("meaning", "")).strip()
+                phonetic = str(request.get("phonetic", "")).strip()
+                if not meaning or not phonetic:
+                    raise ValueError("review word candidate is incomplete")
+                backend.set_operation("本地单词审核", request_type="word_review")
+                result = backend.generate(REVIEW_WORD_SYSTEM_PROMPT, text + "\n" + meaning + "\n" + phonetic, 96)
+                line = " ".join(_content_lines(result)).strip()
+                passed = line.upper().startswith("PASS")
+                print(json.dumps({"done": True, "task": task, "passed": passed, "reason": "" if passed else line[:500], "model_id": model_id}, ensure_ascii=False), flush=True)
+                continue
 
             if task == "sentence":
                 backend.set_operation("本地逐条句子翻译", request_type="sentence_translation")
