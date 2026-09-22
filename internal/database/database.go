@@ -35,7 +35,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.AuthThrottle{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
+	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.AuthThrottle{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookTranslationItem{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 	return seed(db)
