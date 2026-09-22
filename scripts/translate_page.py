@@ -46,11 +46,9 @@ TRANSLATOR_SYSTEM_PROMPT = """You are a professional English-to-Chinese translat
 
 Translate the TARGET TEXT into natural Simplified Chinese.
 
-You will receive CONTEXT to help resolve ambiguity.
-
 Rules:
 - Translate only TARGET TEXT.
-- CONTEXT is only for understanding. Never translate extra context.
+- Do not use or request external context.
 - Preserve the original meaning. Do not explain, expand, add, or omit information.
 - Use concise, natural Simplified Chinese suitable for Chinese students.
 - Resolve ambiguous words, pronouns, tense, phrases, and proper nouns from context.
@@ -62,11 +60,11 @@ Rules:
 
 WORD_TRANSLATOR_SYSTEM_PROMPT = """You are a professional vocabulary editor for children's English textbooks.
 
-Translate only the TARGET WORD as it is used in the TARGET SENTENCE and CONTEXT.
+Translate only the TARGET WORD as it is used in the TARGET SENTENCE.
 
 Rules:
 - Return a concise Simplified Chinese meaning appropriate to this exact occurrence.
-- Use the sentence context to resolve part of speech and polysemy.
+- Use only the target sentence to resolve part of speech and polysemy.
 - Do not translate the whole sentence.
 - Do not provide dictionary meanings that do not apply here.
 - Preserve proper names using their common Chinese transliteration or standard Chinese name.
@@ -75,7 +73,7 @@ Rules:
 
 REVIEWER_SYSTEM_PROMPT = """You are a strict English-to-Chinese translation reviewer for children's textbooks.
 
-Review the CANDIDATE translation of TARGET TEXT using CONTEXT only for disambiguation.
+Review the CANDIDATE translation of TARGET TEXT using only TARGET TEXT.
 Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation,
 pronouns, serious number errors, natural Chinese, and information not present in the source.
 
@@ -146,7 +144,7 @@ Critical structure rules:
 
 Translation rules:
 - Translate only target_text into concise natural Simplified Chinese suitable for Chinese students.
-- Use context only to resolve ambiguity; never translate extra context.
+- Use only target_text; do not request or infer external context.
 - Preserve meaning, negation, names, numbers, dates, times, and factual information.
 - For each word, return a concise Simplified Chinese dictionary-style meaning for that exact occurrence and grammatical role.
 - Do not return the whole sentence as a word meaning.
@@ -838,21 +836,22 @@ def page_context(segments: list[dict[str, Any]], index: int, max_chars: int = 24
 
 
 def sentence_prompt(context: str, target: str) -> str:
-    return f"CONTEXT:\n{context}\n\nTARGET TEXT:\n{target}"
+    del context
+    return f"TARGET TEXT:\n{target}"
 
 
 def word_prompt(context: str, sentence: str, word: str) -> str:
+    del context
     return (
-        f"CONTEXT:\n{context}\n\n"
         f"TARGET SENTENCE:\n{sentence}\n\n"
         f"TARGET WORD:\n{word}"
     )
 
 
 def reviewer_prompt(kind: str, context: str, target: str, candidate: str) -> str:
+    del context
     return (
         f"TYPE: {kind}\n\n"
-        f"CONTEXT:\n{context}\n\n"
         f"TARGET TEXT:\n{target}\n\n"
         f"CANDIDATE CHINESE TRANSLATION:\n{candidate}"
     )
