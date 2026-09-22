@@ -2315,6 +2315,15 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	if e := s.db.WithContext(ctx).Where("draft_id=? AND position=?", d.ID, page).First(&current).Error; e != nil {
 		return e
 	}
+	modelID := strings.TrimSpace(job.ModelID)
+	if modelID == "" {
+		modelID = pageTranslationSettings(d, current).TranslationModel
+	}
+
+	if ai.IsLocalTranslation(modelID) {
+		return s.translateLocalItems(ctx, job, d, current, modelID)
+	}
+
 	if e := os.MkdirAll(work, 0750); e != nil {
 		return e
 	}
@@ -2334,60 +2343,49 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 		return e
 	}
 
-	modelID := strings.TrimSpace(job.ModelID)
-	if modelID == "" {
-		modelID = pageTranslationSettings(d, current).TranslationModel
+	// Cloud translation keeps the existing whole-page structured flow.
+	s.stopTranslationDaemon()
+	cmd := exec.CommandContext(
+		ctx,
+		s.cfg.Python,
+		filepath.Join("scripts", "translate_page.py"),
+		"--input", input,
+		"--output", output,
+		"--model-id", modelID,
+	)
+	cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
+	cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
+	stdout, e := cmd.StdoutPipe()
+	if e != nil {
+		return e
 	}
-	if ai.IsLocalTranslation(modelID) {
-		if e := s.runTranslationDaemon(ctx, job, input, output, modelID); e != nil {
-			return e
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	job.Progress, job.Total = 0, 2
+	s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+	if e := cmd.Start(); e != nil {
+		return e
+	}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		var event struct {
+			Event    string `json:"event"`
+			Stage    string `json:"stage"`
+			Progress int    `json:"progress"`
+			Total    int    `json:"total"`
 		}
-	} else {
-		// Cloud translation is lightweight and does not need to evict an idle
-		// TTS daemon. It still uses the exact same translation/review prompts.
-		s.stopTranslationDaemon()
-		cmd := exec.CommandContext(
-			ctx,
-			s.cfg.Python,
-			filepath.Join("scripts", "translate_page.py"),
-			"--input", input,
-			"--output", output,
-			"--model-id", modelID,
-		)
-		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
-		cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
-		stdout, e := cmd.StdoutPipe()
-		if e != nil {
-			return e
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "progress" || event.Total <= 0 {
+			continue
 		}
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		job.Progress, job.Total = 0, 2
+		job.Progress, job.Total = event.Progress, event.Total
 		s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
-		if e := cmd.Start(); e != nil {
-			return e
-		}
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			var event struct {
-				Event    string `json:"event"`
-				Stage    string `json:"stage"`
-				Progress int    `json:"progress"`
-				Total    int    `json:"total"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Event != "progress" || event.Total <= 0 {
-				continue
-			}
-			job.Progress, job.Total = event.Progress, event.Total
-			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
-		}
-		if e := scanner.Err(); e != nil {
-			_ = cmd.Process.Kill()
-			return e
-		}
-		if e := cmd.Wait(); e != nil {
-			return fmt.Errorf("translate: %w: %s", e, strings.TrimSpace(stderr.String()))
-		}
+	}
+	if e := scanner.Err(); e != nil {
+		_ = cmd.Process.Kill()
+		return e
+	}
+	if e := cmd.Wait(); e != nil {
+		return fmt.Errorf("translate: %w: %s", e, strings.TrimSpace(stderr.String()))
 	}
 
 	translated, e := os.ReadFile(output)
@@ -2416,13 +2414,130 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	})
 }
 
-func (s *EditorService) runTranslationDaemon(ctx context.Context, job *model.TextbookJob, input, output, modelID string) error {
+type localTranslationResponse struct {
+	Done        bool   `json:"done"`
+	Task        string `json:"task"`
+	Translation string `json:"translation"`
+	Meaning     string `json:"meaning"`
+	Phonetic    string `json:"phonetic"`
+	Error       string `json:"error"`
+	ErrorType   string `json:"error_type"`
+	Recoverable bool   `json:"recoverable"`
+}
+
+func (s *EditorService) translateLocalItems(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, current model.TextbookDraftPage, modelID string) error {
+	var items []model.TextbookTranslationItem
+	if e := s.db.WithContext(ctx).
+		Where("draft_id=? AND page=? AND item_type IN ?", d.ID, current.Position, []string{"sentence", "word"}).
+		Order("segment_id ASC, CASE item_type WHEN 'sentence' THEN 0 ELSE 1 END, word_index ASC, id ASC").
+		Find(&items).Error; e != nil {
+		return e
+	}
+	if len(items) == 0 {
+		return bad(fmt.Sprintf("第 %d 页没有可翻译内容", current.Position))
+	}
+
+	sentenceBySegment := make(map[string]string)
+	for _, item := range items {
+		if item.ItemType == "sentence" {
+			sentenceBySegment[item.SegmentID] = strings.TrimSpace(item.SourceText)
+		}
+	}
+
+	job.Progress, job.Total = 0, len(items)
+	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(items)})
+
+	provider := ""
+	if info, ok := ai.Find(modelID); ok {
+		provider = info.Provider
+	}
+
+	issues := 0
+	for index, item := range items {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		request := map[string]any{
+			"task":     item.ItemType,
+			"text":     item.SourceText,
+			"model_id": modelID,
+		}
+		if item.ItemType == "word" {
+			request["sentence"] = sentenceBySegment[item.SegmentID]
+		}
+
+		response, err := s.runLocalTranslationItem(ctx, request, modelID)
+		if err != nil {
+			if markErr := s.markLocalTranslationIssue(ctx, item.ID, modelID, provider, err.Error()); markErr != nil {
+				return errors.Join(err, markErr)
+			}
+			issues++
+			job.Progress = index + 1
+			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+			continue
+		}
+
+		updates := map[string]any{
+			"translation_model": modelID,
+			"provider":          provider,
+			"status":            "translated",
+			"failure_reason":    nil,
+			"revision":          gorm.Expr("revision+1"),
+		}
+		if item.ItemType == "sentence" {
+			updates["translation"] = response.Translation
+		} else {
+			updates["meaning"] = response.Meaning
+			updates["phonetic"] = response.Phonetic
+		}
+		if e := s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?", item.ID).Updates(updates).Error; e != nil {
+			return e
+		}
+		job.Progress = index + 1
+		s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+	}
+
+	if e := s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).
+		Where("draft_id=? AND position=?", d.ID, current.Position).
+		Updates(map[string]any{
+			"translation_model": modelID,
+			"checked":           false,
+			"audio_checked":     false,
+			"version":           gorm.Expr("version+1"),
+		}).Error; e != nil {
+		return e
+	}
+	if e := s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?", d.ID).
+		Update("version", gorm.Expr("version+1")).Error; e != nil {
+		return e
+	}
+	if issues > 0 {
+		return fmt.Errorf("%d 条本地翻译结果需要人工审核", issues)
+	}
+	return nil
+}
+
+func (s *EditorService) markLocalTranslationIssue(ctx context.Context, id uint64, modelID, provider, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 2000 {
+		reason = reason[:2000]
+	}
+	return s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?", id).Updates(map[string]any{
+		"translation_model": modelID,
+		"provider":          provider,
+		"status":            "review_warning",
+		"failure_reason":    reason,
+		"revision":          gorm.Expr("revision+1"),
+	}).Error
+}
+
+func (s *EditorService) runLocalTranslationItem(ctx context.Context, request map[string]any, modelID string) (localTranslationResponse, error) {
 	s.translationMu.Lock()
 	defer s.translationMu.Unlock()
 
-	// Local translation and local TTS are deliberately mutually exclusive on
-	// 16 GB Apple Silicon machines. An idle TTS/Whisper daemon is released
-	// before MLX loads the 4B translation model.
 	s.stopAudioDaemon()
 
 	s.translationProcessMu.Lock()
@@ -2433,21 +2548,21 @@ func (s *EditorService) runTranslationDaemon(ctx context.Context, job *model.Tex
 	if s.translationCmd == nil || s.translationCmd.ProcessState != nil {
 		cmd := exec.Command(s.cfg.Python, filepath.Join("scripts", "translation_daemon.py"))
 		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
-		cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+filepath.Dir(input))
+		cmd.Env = append(os.Environ())
 		in, e := cmd.StdinPipe()
 		if e != nil {
 			s.translationProcessMu.Unlock()
-			return e
+			return localTranslationResponse{}, e
 		}
 		out, e := cmd.StdoutPipe()
 		if e != nil {
 			s.translationProcessMu.Unlock()
-			return e
+			return localTranslationResponse{}, e
 		}
 		cmd.Stderr = os.Stderr
 		if e := cmd.Start(); e != nil {
 			s.translationProcessMu.Unlock()
-			return e
+			return localTranslationResponse{}, e
 		}
 		s.translationCmd, s.translationIn, s.translationOut = cmd, in, bufio.NewScanner(out)
 		s.translationDaemonModel = modelID
@@ -2455,42 +2570,46 @@ func (s *EditorService) runTranslationDaemon(ctx context.Context, job *model.Tex
 	in, out := s.translationIn, s.translationOut
 	s.translationProcessMu.Unlock()
 
-	job.Progress, job.Total = 0, 2
-	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": 2})
-	request := map[string]any{"input": input, "output": output, "model_id": modelID}
-	raw, _ := json.Marshal(request)
-	if _, e := fmt.Fprintf(in, "%s\n", raw); e != nil {
-		s.stopTranslationDaemon()
-		return e
+	raw, e := json.Marshal(request)
+	if e != nil {
+		return localTranslationResponse{}, e
 	}
+	if _, e = fmt.Fprintf(in, "%s\n", raw); e != nil {
+		s.stopTranslationDaemon()
+		return localTranslationResponse{}, e
+	}
+
 	for {
 		line, e := scanDaemonLine(ctx, out, s.stopTranslationDaemon, "translation")
 		if e != nil {
 			if errors.Is(e, io.EOF) {
 				e = errors.New("translation worker exited unexpectedly")
 			}
-			return e
+			return localTranslationResponse{}, e
 		}
-		var event struct {
-			Event    string `json:"event"`
-			Progress int    `json:"progress"`
-			Total    int    `json:"total"`
-			Error    string `json:"error"`
-			Done     bool   `json:"done"`
-		}
-		if json.Unmarshal(line, &event) != nil {
+		var response localTranslationResponse
+		if json.Unmarshal(line, &response) != nil {
 			continue
 		}
-		if event.Total > 0 && event.Event == "progress" {
-			job.Progress, job.Total = event.Progress, event.Total
-			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
+		if !response.Done {
+			continue
 		}
-		if event.Done {
-			if event.Error != "" {
-				return errors.New(event.Error)
+		if response.Error != "" {
+			return response, fmt.Errorf("%s: %s", response.ErrorType, response.Error)
+		}
+		if response.Task == "sentence" {
+			if strings.TrimSpace(response.Translation) == "" {
+				return response, errors.New("local sentence translation is empty")
 			}
-			return nil
+			return response, nil
 		}
+		if response.Task == "word" {
+			if strings.TrimSpace(response.Meaning) == "" || strings.TrimSpace(response.Phonetic) == "" {
+				return response, errors.New("local word result is incomplete")
+			}
+			return response, nil
+		}
+		return response, errors.New("local translation daemon returned an unknown task")
 	}
 }
 
