@@ -39,6 +39,21 @@ WORD_SCHEMA: dict[str, Any] = {
     "required":["r"],
 }
 
+def exact_array_schema(key: str, item_schema: dict[str, Any], count: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            key: {
+                "type": "array",
+                "items": item_schema,
+                "minItems": count,
+                "maxItems": count,
+            }
+        },
+        "required": [key],
+    }
+
 def call(client: OnlineLLMClient, system: str, payload: dict[str, Any], schema: dict[str, Any], name: str, max_tokens: int) -> dict[str, Any]:
     raw = client.generate_structured(
         system,
@@ -67,7 +82,8 @@ def main() -> None:
     out={"translations":[],"words":[]}
     try:
         if sentences:
-            res=call(backend,SENTENCE_SYSTEM,{"s":sentences},SENTENCE_SCHEMA,"sentence_translations",max(256,64+len(sentences)*64))
+            sentence_schema=exact_array_schema("t", {"type":"string"}, len(sentences))
+            res=call(backend,SENTENCE_SYSTEM,{"s":sentences},sentence_schema,"sentence_translations",max(256,64+len(sentences)*64))
             vals=res.get("t")
             if not isinstance(vals,list) or len(vals)!=len(sentences):
                 raise ValueError("sentence translation result count mismatch")
@@ -76,7 +92,13 @@ def main() -> None:
                 raise ValueError("sentence translation contains an empty result")
             out["translations"]=cleaned
         if words:
-            res=call(backend,WORD_SYSTEM,{"w":words},WORD_SCHEMA,"word_translations",max(512,96+len(words)*40))
+            word_schema=exact_array_schema("r", {
+                "type":"array",
+                "prefixItems":[{"type":"string"},{"type":"string"}],
+                "minItems":2,
+                "maxItems":2,
+            }, len(words))
+            res=call(backend,WORD_SYSTEM,{"w":words},word_schema,"word_translations",max(512,96+len(words)*40))
             vals=res.get("r")
             if not isinstance(vals,list) or len(vals)!=len(words):
                 raise ValueError("word translation result count mismatch")
