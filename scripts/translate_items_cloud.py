@@ -103,13 +103,20 @@ def main() -> None:
             if not isinstance(vals,list) or len(vals)!=len(words):
                 raise ValueError("word translation result count mismatch")
             cleaned=[]
-            for row in vals:
+            for index, row in enumerate(vals):
+                source = words[index]
                 if not isinstance(row,list) or len(row)!=2:
-                    raise ValueError("invalid word translation row")
-                meaning=clean_translation(row[0])
-                phonetic=clean_phonetic(row[1])
+                    raise ValueError(f"invalid word translation row: word={source!r}, row={row!r}")
+                raw_meaning = row[0]
+                raw_phonetic = row[1]
+                meaning=clean_translation(raw_meaning)
+                phonetic=clean_phonetic(raw_phonetic)
                 if not meaning or not phonetic:
-                    raise ValueError("word translation contains incomplete meaning/phonetic")
+                    raise ValueError(
+                        "word translation contains incomplete meaning/phonetic: "
+                        f"word={source!r}, raw_meaning={raw_meaning!r}, "
+                        f"raw_phonetic={raw_phonetic!r}, meaning={meaning!r}, phonetic={phonetic!r}"
+                    )
                 cleaned.append([meaning,phonetic])
             out["words"]=cleaned
         args.output.write_text(json.dumps(out,ensure_ascii=False,separators=(",",":"))+"\n",encoding="utf-8")
