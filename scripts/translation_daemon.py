@@ -31,33 +31,36 @@ Return exactly one line containing only the Chinese translation.
 Do not output labels, quotes, Markdown, explanations, notes, reasoning, or JSON."""
 
 WORD_SYSTEM_PROMPT = """You are a deterministic vocabulary editor for Chinese primary-school English textbooks.
-Use TARGET SENTENCE only to determine which sense of TARGET WORD is intended.
+Translate and pronounce ONLY the supplied English word. Ignore all sentence context.
 
 Return exactly two lines:
-Line 1: ONE short dictionary-style Simplified Chinese gloss for TARGET WORD only.
-Line 2: the General American English IPA pronunciation of TARGET WORD, including stress where appropriate.
+Line 1: ONE short common Simplified Chinese dictionary gloss for the word.
+Line 2: ONE General American English IPA pronunciation for the word.
 
-Critical rules for Line 1:
-- NEVER translate or paraphrase the whole sentence.
-- NEVER include the sentence subject or object unless they are part of the word's lexical meaning.
-- Return only one sense appropriate to this sentence.
-- For one English word, the gloss should normally be 1-6 Chinese characters.
-- No labels, examples, explanation, full-sentence punctuation, or multiple meanings.
+Critical rules:
+- Never translate a sentence or phrase.
+- Never output an example, explanation, part-of-speech label, or multiple meanings.
+- Line 1 should normally be 1-6 Chinese characters.
+- Line 2 must be IPA only.
+- Use IPA stress marks ˈ or ˌ when needed.
+- Use IPA length mark ː when needed; never use ASCII colon ":" for vowel length.
+- Never mix ordinary English spelling into the IPA.
+- Never use apostrophe "'" as a stress mark.
+- No labels, quotes, Markdown, explanations, notes, reasoning, or JSON.
 
 Examples:
-TARGET WORD: for
-TARGET SENTENCE: These gifts are for you.
-Line 1: 给
+for
+给
+fɔːr
 
-TARGET WORD: hospital
-TARGET SENTENCE: I see a hospital.
-Line 1: 医院
+listen
+听
+ˈlɪsən
 
-TARGET WORD: under
-TARGET SENTENCE: The cat is under the desk.
-Line 1: 在……下面
-
-Do not output labels, quotes, Markdown, explanations, notes, reasoning, or JSON."""
+hospital
+医院
+ˈhɑːspɪtl
+"""
 
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 MEANING_LABEL_RE = re.compile(r"^(?:meaning|chinese meaning|词义|中文词义)\s*[:：]\s*", re.IGNORECASE)
@@ -125,8 +128,16 @@ def parse_word_result(value: str, source_word: str) -> tuple[str, str]:
         raise LocalItemValidationError("word meaning looks like a sentence or multiple meanings")
     if not phonetic:
         raise LocalItemValidationError("word phonetic is empty or invalid")
-    if phonetic.casefold() == normalize_source_text(source_word).casefold():
+    source = normalize_source_text(source_word).casefold()
+    lowered_phonetic = phonetic.casefold()
+    if lowered_phonetic == source:
         raise LocalItemValidationError("word phonetic repeats the source word instead of IPA")
+    if source and source in lowered_phonetic:
+        raise LocalItemValidationError("word phonetic contains ordinary English spelling")
+    if "'" in phonetic or '"' in phonetic:
+        raise LocalItemValidationError("word phonetic uses ASCII quote instead of IPA stress mark")
+    if ":" in phonetic:
+        raise LocalItemValidationError("word phonetic uses ASCII colon instead of IPA length mark")
     return meaning, phonetic
 
 
@@ -134,12 +145,8 @@ def sentence_user_prompt(text: str) -> str:
     return text
 
 
-def word_user_prompt(word: str, sentence: str) -> str:
-    return (
-        f"TARGET WORD:\n{word}\n\n"
-        f"TARGET SENTENCE:\n{sentence}\n\n"
-        "Remember: Line 1 is only the short dictionary meaning of TARGET WORD, never the sentence translation."
-    )
+def word_user_prompt(word: str) -> str:
+    return word
 
 
 def main() -> None:
@@ -186,11 +193,8 @@ def main() -> None:
                 )
                 continue
 
-            sentence = normalize_source_text(request.get("sentence", ""))
-            if not sentence:
-                raise LocalItemValidationError("word item is missing its parent sentence")
             backend.set_operation("本地逐条单词翻译", request_type="word_translation")
-            result = backend.generate(WORD_SYSTEM_PROMPT, word_user_prompt(text, sentence), 96)
+            result = backend.generate(WORD_SYSTEM_PROMPT, word_user_prompt(text), 96)
             meaning, phonetic = parse_word_result(result, text)
             print(
                 json.dumps(
