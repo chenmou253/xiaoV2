@@ -16,11 +16,16 @@ from translate_page import configured_backend, OnlineLLMClient, clean_phonetic, 
 SENTENCE_SYSTEM = """Translate English textbook sentences into accurate, natural Simplified Chinese suitable for primary-school students.
 Preserve meaning, names, numbers and negation. Do not add or omit information."""
 
-WORD_SYSTEM = """Translate each English word independently into one concise Simplified Chinese dictionary meaning suitable for primary-school students.
-Also return General American English IPA for every word.
+WORD_SYSTEM = """For each English word, return exactly one object with:
+- "m": one concise Simplified Chinese dictionary meaning suitable for primary-school students.
+- "p": General American English IPA only.
+
 Rules:
 - Treat every word independently. Never infer sentence context.
 - Preserve input order.
+- "m" MUST contain Chinese meaning, never IPA.
+- "p" MUST contain IPA, never Chinese translation.
+- Ignore surrounding punctuation when determining pronunciation and meaning.
 - Use rhotic General American pronunciation.
 - Use American /oʊ/ rather than British /əʊ/ where applicable.
 - Include lexical stress where appropriate."""
@@ -93,10 +98,13 @@ def main() -> None:
             out["translations"]=cleaned
         if words:
             word_schema=exact_array_schema("r", {
-                "type":"array",
-                "prefixItems":[{"type":"string"},{"type":"string"}],
-                "minItems":2,
-                "maxItems":2,
+                "type":"object",
+                "additionalProperties":False,
+                "properties":{
+                    "m":{"type":"string","minLength":1},
+                    "p":{"type":"string","minLength":1},
+                },
+                "required":["m","p"],
             }, len(words))
             res=call(backend,WORD_SYSTEM,{"w":words},word_schema,"word_translations",max(512,96+len(words)*40))
             vals=res.get("r")
@@ -105,10 +113,10 @@ def main() -> None:
             cleaned=[]
             for index, row in enumerate(vals):
                 source = words[index]
-                if not isinstance(row,list) or len(row)!=2:
+                if not isinstance(row,dict):
                     raise ValueError(f"invalid word translation row: word={source!r}, row={row!r}")
-                raw_meaning = row[0]
-                raw_phonetic = row[1]
+                raw_meaning = row.get("m", "")
+                raw_phonetic = row.get("p", "")
                 meaning=clean_translation(raw_meaning)
                 phonetic=clean_phonetic(raw_phonetic)
                 if not meaning or not phonetic:
