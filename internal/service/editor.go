@@ -303,6 +303,14 @@ func stripTranslationFields(content map[string]any) {
 	}
 }
 
+func nullableTranslation(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func translationStatus(translation, meaning, phonetic string) string {
 	if strings.TrimSpace(translation) != "" || strings.TrimSpace(meaning) != "" || strings.TrimSpace(phonetic) != "" {
 		return "translated"
@@ -331,7 +339,7 @@ func translationItemsFromContent(draftID string, page int, sourceVersion uint64,
 		items = append(items, model.TextbookTranslationItem{
 			DraftID: draftID, Page: uint32(page), ItemID: segmentID, SegmentID: segmentID,
 			ItemType: "sentence", WordIndex: 0, SourceText: sourceText,
-			Translation: strings.TrimSpace(translation), Meaning: "", Phonetic: "",
+			Translation: nullableTranslation(translation), Meaning: "", Phonetic: "",
 			TranslationModel: modelID, Provider: provider,
 			Status: translationStatus(translation, "", ""), SourcePageVersion: sourceVersion, Revision: 1,
 		})
@@ -352,7 +360,7 @@ func translationItemsFromContent(draftID string, page int, sourceVersion uint64,
 			items = append(items, model.TextbookTranslationItem{
 				DraftID: draftID, Page: uint32(page), ItemID: wordID, SegmentID: segmentID,
 				ItemType: "word", WordIndex: uint32(wordIndex), SourceText: wordText,
-				Translation: "", Meaning: strings.TrimSpace(meaning), Phonetic: strings.TrimSpace(phonetic),
+				Translation: nil, Meaning: strings.TrimSpace(meaning), Phonetic: strings.TrimSpace(phonetic),
 				TranslationModel: modelID, Provider: provider,
 				Status: translationStatus("", meaning, phonetic), SourcePageVersion: sourceVersion, Revision: 1,
 			})
@@ -392,8 +400,8 @@ func (s *EditorService) hydrateTranslationItems(ctx context.Context, draftID str
 			continue
 		}
 		segmentID, _ := segment["id"].(string)
-		if item, found := byID[segmentID]; found && item.ItemType == "sentence" {
-			segment["translation"] = item.Translation
+		if item, found := byID[segmentID]; found && item.ItemType == "sentence" && item.Translation != nil {
+			segment["translation"] = *item.Translation
 		} else {
 			segment["translation"] = ""
 		}
