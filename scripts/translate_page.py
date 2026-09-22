@@ -96,7 +96,7 @@ BATCH_TRANSLATOR_SYSTEM_PROMPT = (
     + "\n\n"
     + WORD_TRANSLATOR_SYSTEM_PROMPT
     + "\n\n"
-    + "For this page-level request, translate every sentence and every listed word. "
+    + "For this page-level request, translate every sentence and every listed word using only each target sentence. "
     + "Override the single-item plain-text output format and return exactly one JSON object: "
     + '{"segments":[{"id":"segment id","translation":"...","words":[{"id":"word id","meaning":"...","phonetic":"..."}]}]}. '
     + "Keep every supplied segment and word ID exactly once, in any order. "
@@ -122,8 +122,8 @@ LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translati
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
 
-The request contains one shared "context", an ordered "items" array, and an OUTPUT TEMPLATE whose array sizes are already correct.
-The shared context applies to every item in this batch. Use it only to resolve ambiguity; do not translate it.
+The request contains an ordered "items" array and an OUTPUT TEMPLATE whose array sizes are already correct.
+Use only each item's target_text and listed words. No external context is supplied.
 Copy the OUTPUT TEMPLATE structure exactly and fill only its empty string values.
 Return exactly this shape:
 {"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
@@ -160,7 +160,7 @@ LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structure
 Your entire response MUST be exactly one valid JSON object.
 Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
 
-The input contains one shared "context" for the current batch plus ordered candidate segments and candidate words. The shared context applies to every candidate. Do NOT output any source IDs.
+The input contains ordered candidate segments and candidate words. Review each item using only its target_text. Do NOT output any source IDs.
 Return exactly:
 {"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
 
@@ -900,7 +900,6 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
         items.append(
             {
                 "id": segment_id,
-                "context": page_context(segments, index),
                 "target_text": sentence,
                 "words": words,
             }
@@ -909,21 +908,33 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
 
 
 def batch_translation_prompt(items: list[dict[str, Any]]) -> str:
+    model_items = [
+        {
+            "id": item["id"],
+            "target_text": item["target_text"],
+            "words": item["words"],
+        }
+        for item in items
+    ]
     return (
-        "Translate every supplied textbook-page item. Each item has its own context; do not translate context. "
+        "Translate every supplied textbook-page item using only target_text and its listed words. "
         "Translate target_text as a sentence and each word only in its target sentence. Return General American English IPA for every word, even when the input phonetic is blank. Use rhotic American pronunciation, not British IPA. Existing phonetics are reference values only and must be preserved by the application.\n\n"
         "PAGE ITEMS:\n"
-        + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(model_items, ensure_ascii=False, separators=(",", ":"))
         + "\n\nReturn the exact page JSON shape required by the system instructions."
     )
 
 
 def batch_review_prompt(items: list[dict[str, Any]]) -> str:
+    model_items = [
+        {key: value for key, value in item.items() if key != "context"}
+        for item in items
+    ]
     return (
-        "Review every supplied textbook-page candidate. Use each item's context only for disambiguation. "
+        "Review every supplied textbook-page candidate using only each target_text and candidate fields. "
         "Correct omissions, additions, mistranslations, names, numbers, negation, and word polysemy.\n\n"
         "PAGE CANDIDATES:\n"
-        + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(model_items, ensure_ascii=False, separators=(",", ":"))
         + "\n\nReturn the exact page review JSON shape required by the system instructions."
     )
 
@@ -1016,7 +1027,6 @@ def local_translation_output_template(items: list[dict[str, Any]]) -> dict[str, 
 
 def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     payload = {
-        "context": _local_shared_context(items),
         "items": [
             {
                 "target_text": item["target_text"],
@@ -1034,7 +1044,7 @@ def local_translation_prompt(items: list[dict[str, Any]]) -> str:
     output_template = local_translation_output_template(items)
     return (
         "Translate the following ordered textbook batch. "
-        "The top-level context is shared by all items and is background only; do not translate it. "
+        "Use only each item's target_text and listed words. No shared context is provided. "
         "Do not output or reconstruct any source IDs. "
         "The OUTPUT TEMPLATE already has the exact required array lengths. "
         "Copy its JSON structure exactly and ONLY replace empty string values. "
@@ -1110,7 +1120,6 @@ def local_review_prompt(
     candidates: dict[str, dict[str, Any]],
 ) -> str:
     payload = {
-        "context": _local_shared_context(items),
         "segments": [
             {
                 "target_text": item["target_text"],
@@ -1129,7 +1138,7 @@ def local_review_prompt(
     }
     return (
         "Review the following ordered textbook translation batch. "
-        "The top-level context is shared by all candidates and is background only. "
+        "Use only each candidate's target_text. No shared context is provided. "
         "Refer to items only by zero-based segment_index and word_index within this batch. "
         "Do not output or reconstruct source IDs.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1743,7 +1752,6 @@ def build_review_items(
         review_items.append(
             {
                 "id": item["id"],
-                "context": item["context"],
                 "target_text": item["target_text"],
                 "candidate_translation": candidate["translation"],
                 "words": [
@@ -1863,7 +1871,7 @@ def local_translate_candidates(
                     "message": (
                         f"本地分批翻译 {batch_index}/{total_batches}："
                         f"{len(batch_items)} 个片段，{word_count} 个单词；"
-                        "每次只处理 1 个片段，共享 context 只发送一次"
+                        "每次只处理 1 个片段，不发送 context"
                     ),
                 },
                 ensure_ascii=False,
@@ -2073,7 +2081,7 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
         log_translation(
             kind="sentence",
             target=target_sentence(segment),
-            context=next(item["context"] for item in items if item["id"] == segment_id),
+            context="",
             result=TranslationResult(result["translation"], result.get("score"), segment_issues, review_status),
         )
         words_by_id = {str(word.get("id", "")): word for word in segment.get("words", []) if isinstance(word, dict)}
