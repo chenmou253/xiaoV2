@@ -411,7 +411,7 @@ class TranslationTests(unittest.TestCase):
         )
         self.assertEqual(result.translation, "我喜欢苹果。")
         self.assertEqual(result.review, "WARNING")
-        self.assertIn("CONTEXT:\nI like apples.", backend.calls[0][1])
+        self.assertNotIn("CONTEXT:", backend.calls[0][1])
         self.assertIs(backend.calls[1][0], REVIEWER_SYSTEM_PROMPT)
 
     def test_word_translation_is_scoped_to_sentence(self):
@@ -424,6 +424,7 @@ class TranslationTests(unittest.TestCase):
             sentence="We sat on the river bank.",
         )
         self.assertEqual(result.translation, "河岸")
+        self.assertNotIn("CONTEXT:", backend.calls[0][1])
         self.assertIn("TARGET SENTENCE:\nWe sat on the river bank.", backend.calls[0][1])
         self.assertIn("TARGET WORD:\nbank", backend.calls[0][1])
 
@@ -661,7 +662,7 @@ class TranslationTests(unittest.TestCase):
             [["s0"], ["s1"], ["s2"], ["s3"], ["s4"], ["s5"], ["s6"]],
         )
 
-    def test_local_translation_prompt_uses_one_shared_context(self):
+    def test_local_translation_prompt_sends_no_context(self):
         from translate_page import local_translation_prompt
 
         items = [
@@ -679,8 +680,9 @@ class TranslationTests(unittest.TestCase):
             },
         ]
         prompt = local_translation_prompt(items)
-        payload = json.loads(prompt.split("\n\n", 1)[1])
-        self.assertEqual(payload["context"], "First sentence.\nSecond sentence.")
+        source_payload = prompt.split("SOURCE INPUT:\n", 1)[1].split("\n\nOUTPUT TEMPLATE:", 1)[0]
+        payload = json.loads(source_payload)
+        self.assertNotIn("context", payload)
         self.assertNotIn("context", payload["items"][0])
         self.assertNotIn("context", payload["items"][1])
         self.assertEqual(payload["items"][0]["target_text"], "First sentence.")
