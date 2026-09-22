@@ -2447,24 +2447,39 @@ func (e localTranslationItemError) Error() string { return e.Message }
 func (s *EditorService) translateLocalItems(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, current model.TextbookDraftPage, modelID string) error {
 	var items []model.TextbookTranslationItem
 	if e := s.db.WithContext(ctx).
-		Where("draft_id=? AND page=? AND item_type IN ?", d.ID, current.Position, []string{"sentence", "word"}).
+		Where("draft_id=? AND page=? AND item_type IN ? AND status IN ?",
+			d.ID,
+			current.Position,
+			[]string{"sentence", "word"},
+			[]string{"pending", "review_warning"},
+		).
 		Order("segment_id ASC, CASE item_type WHEN 'sentence' THEN 0 ELSE 1 END, word_index ASC, id ASC").
 		Find(&items).Error; e != nil {
 		return e
 	}
-	if len(items) == 0 {
-		return bad(fmt.Sprintf("第 %d 页没有可翻译内容", current.Position))
-	}
-
-	sentenceBySegment := make(map[string]string)
-	for _, item := range items {
-		if item.ItemType == "sentence" {
-			sentenceBySegment[item.SegmentID] = strings.TrimSpace(item.SourceText)
-		}
-	}
 
 	job.Progress, job.Total = 0, len(items)
-	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(items)})
+	if e := s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(items)}).Error; e != nil {
+		return e
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	// A pending/review-warning word still needs its parent sentence even when
+	// that sentence is already translated/approved, so load sentence source
+	// text independently from the retry candidate set.
+	var sentenceItems []model.TextbookTranslationItem
+	if e := s.db.WithContext(ctx).
+		Select("segment_id", "source_text").
+		Where("draft_id=? AND page=? AND item_type=?", d.ID, current.Position, "sentence").
+		Find(&sentenceItems).Error; e != nil {
+		return e
+	}
+	sentenceBySegment := make(map[string]string, len(sentenceItems))
+	for _, item := range sentenceItems {
+		sentenceBySegment[item.SegmentID] = strings.TrimSpace(item.SourceText)
+	}
 
 	provider := ""
 	if info, ok := ai.Find(modelID); ok {
