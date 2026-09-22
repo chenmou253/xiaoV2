@@ -155,15 +155,15 @@ type TextbookTranslationItem struct {
 	Page              uint32     `gorm:"type:int unsigned;not null;default:0;uniqueIndex:uk_translation_item,priority:2;index:idx_translation_page,priority:2;index:idx_translation_segment,priority:2;index:idx_translation_status,priority:2;index:idx_translation_type,priority:2" json:"page"`
 	ItemID            string     `gorm:"size:191;not null;default:'';uniqueIndex:uk_translation_item,priority:3" json:"item_id"`
 	SegmentID         string     `gorm:"size:191;not null;default:'';index:idx_translation_segment,priority:3" json:"segment_id"`
-	ItemType          string     `gorm:"size:16;not null;default:'';index:idx_translation_type,priority:3" json:"item_type"`
+	ItemType          string     `gorm:"size:16;not null;default:'';index:idx_translation_type,priority:3;index:idx_translation_library,priority:1" json:"item_type"`
 	WordIndex         uint32     `gorm:"type:int unsigned;not null;default:0" json:"word_index"`
-	SourceText        string     `gorm:"type:text;not null" json:"source_text"`
+	SourceText        string     `gorm:"size:500;not null;index:idx_translation_library,priority:3" json:"source_text"`
 	Translation       *string    `gorm:"type:text" json:"translation,omitempty"`
 	Meaning           string     `gorm:"size:100;not null;default:''" json:"meaning"`
 	Phonetic          string     `gorm:"size:191;not null;default:''" json:"phonetic"`
 	TranslationModel  string     `gorm:"size:96;not null;default:''" json:"translation_model"`
 	Provider          string     `gorm:"size:32;not null;default:''" json:"provider"`
-	Status            string     `gorm:"size:32;not null;default:'pending';index:idx_translation_status,priority:3" json:"status"`
+	Status            string     `gorm:"size:32;not null;default:'pending';index:idx_translation_status,priority:3;index:idx_translation_library,priority:2" json:"status"`
 	FailureReason     *string    `gorm:"type:text" json:"failure_reason,omitempty"`
 	SourcePageVersion uint64     `gorm:"not null;default:1" json:"source_page_version"`
 	Revision          uint64     `gorm:"not null;default:1" json:"revision"`
