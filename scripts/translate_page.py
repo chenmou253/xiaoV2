@@ -51,7 +51,7 @@ Rules:
 - Do not use or request external context.
 - Preserve the original meaning. Do not explain, expand, add, or omit information.
 - Use concise, natural Simplified Chinese suitable for Chinese students.
-- Resolve ambiguous words, pronouns, tense, phrases, and proper nouns from context.
+- Resolve ambiguous words, pronouns, tense, phrases, and proper nouns only from TARGET TEXT.
 - Use common Chinese forms for familiar names and places; never literally translate a person's name.
 - Preserve all numbers, dates, times, negation, and factual information.
 - Preserve punctuation meaning.
@@ -890,8 +890,8 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
                 {
                     "id": word_id,
                     "text": source,
-                    # Sending an existing value gives the reviewer context,
-                    # but the apply step below never overwrites it.
+                    # Existing phonetic is supplied only as the current field value;
+                    # the apply step below never overwrites a non-empty value.
                     "phonetic": str(word.get("phonetic", "") or "").strip(),
                 }
             )
