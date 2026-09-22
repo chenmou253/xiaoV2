@@ -5,7 +5,13 @@ import types
 import unittest
 from unittest import mock
 
-from translation_daemon import LocalItemValidationError, parse_sentence_result, parse_word_result
+from translation_daemon import (
+    LocalItemValidationError,
+    normalize_word_text,
+    parse_sentence_result,
+    parse_word_result,
+    word_user_prompt,
+)
 
 from translate_page import (
     BATCH_REVIEW_SCHEMA,
@@ -68,6 +74,11 @@ class TranslationTests(unittest.TestCase):
             parse_word_result("医院", "hospital")
         with self.assertRaises(LocalItemValidationError):
             parse_word_result("医院\nhospital", "hospital")
+
+    def test_local_daemon_removes_punctuation_before_word_request(self):
+        self.assertEqual(normalize_word_text("hello,"), "hello")
+        self.assertEqual(normalize_word_text("“hospital.”"), "hospital")
+        self.assertEqual(word_user_prompt("listen!"), "listen")
 
     def test_local_daemon_rejects_sentence_translation_as_word_meaning(self):
         with self.assertRaises(LocalItemValidationError):
@@ -1044,5 +1055,4 @@ class TranslationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 

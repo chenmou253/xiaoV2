@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import unicodedata
 
 from translate_page import LocalMLXBackend, clean_phonetic, clean_translation, normalize_source_text
 
@@ -155,7 +156,17 @@ def sentence_user_prompt(text: str) -> str:
 
 
 def word_user_prompt(word: str) -> str:
-    return word
+    return normalize_word_text(word)
+
+
+def normalize_word_text(value: object) -> str:
+    """Remove punctuation from a word before sending it to the local model."""
+    text = normalize_source_text(value)
+    return "".join(
+        character
+        for character in text
+        if not unicodedata.category(character).startswith("P")
+    ).strip()
 
 
 def main() -> None:
@@ -175,6 +186,8 @@ def main() -> None:
             text = normalize_source_text(request.get("text", ""))
             if task not in {"sentence", "word", "review_sentence", "review_word"}:
                 raise ValueError(f"unsupported local translation task: {task}")
+            if task in {"word", "review_word"}:
+                text = normalize_word_text(text)
             if not text:
                 raise ValueError("local translation request text is empty")
 
