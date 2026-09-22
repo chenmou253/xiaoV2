@@ -2466,21 +2466,6 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 		return nil
 	}
 
-	// A pending/review-warning word still needs its parent sentence even when
-	// that sentence is already translated/approved, so load sentence source
-	// text independently from the retry candidate set.
-	var sentenceItems []model.TextbookTranslationItem
-	if e := s.db.WithContext(ctx).
-		Select("segment_id", "source_text").
-		Where("draft_id=? AND page=? AND item_type=?", d.ID, current.Position, "sentence").
-		Find(&sentenceItems).Error; e != nil {
-		return e
-	}
-	sentenceBySegment := make(map[string]string, len(sentenceItems))
-	for _, item := range sentenceItems {
-		sentenceBySegment[item.SegmentID] = strings.TrimSpace(item.SourceText)
-	}
-
 	provider := ""
 	if info, ok := ai.Find(modelID); ok {
 		provider = info.Provider
@@ -2498,9 +2483,6 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 			"task":     item.ItemType,
 			"text":     item.SourceText,
 			"model_id": modelID,
-		}
-		if item.ItemType == "word" {
-			request["sentence"] = sentenceBySegment[item.SegmentID]
 		}
 
 		response, err := s.runLocalTranslationItem(ctx, request, modelID)
