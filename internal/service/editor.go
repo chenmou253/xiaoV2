@@ -2337,6 +2337,7 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 		return s.translateLocalItems(ctx, job, d, current, modelID)
 	}
 	return s.translateCloudItems(ctx, job, d, current, work, modelID)
+}
 
 
 type cloudTranslationPayload struct { Sentences []string `json:"sentences"`; Words []string `json:"words"` }
