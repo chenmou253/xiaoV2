@@ -487,9 +487,26 @@ class OnlineLLMClient:
         if not response.choices:
             raise ValueError("translation API returned no choices")
         choice = response.choices[0]
-        if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
-            raise CompletionTruncated("translation completion reached its token limit")
         content = choice.message.content
+        if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
+            if os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+                print(
+                    "[TRANSLATION TRUNCATED RESPONSE]",
+                    json.dumps(
+                        {
+                            "request_type": getattr(self, "request_type", "translation"),
+                            "page": getattr(self, "page_number", None),
+                            "model": self.model,
+                            "max_completion_tokens": max_completion_tokens,
+                            "finish_reason": getattr(choice, "finish_reason", None),
+                            "response": content if isinstance(content, str) else "",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            raise CompletionTruncated("translation completion reached its token limit")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("translation API returned empty content")
         return content
