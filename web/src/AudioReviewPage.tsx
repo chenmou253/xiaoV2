@@ -54,41 +54,6 @@ export default function AudioReviewPage({
     setLoading(true);
     setError("");
     try {
-      function translationValue(issue: Row) {
-    return translationDrafts[issue.item_id] || {
-      translation: issue.translation || "",
-      meaning: issue.meaning || "",
-      phonetic: issue.phonetic || "",
-    };
-  }
-
-  function setTranslationValue(issue: Row, patch: Partial<{ translation: string; meaning: string; phonetic: string }>) {
-    setTranslationDrafts((current) => ({
-      ...current,
-      [issue.item_id]: { ...translationValue(issue), ...patch },
-    }));
-  }
-
-  async function saveTranslationIssue(issue: Row) {
-    const value = translationValue(issue);
-    await run(async () => {
-      await api(
-        `/admin/drafts/${encodeURIComponent(draftId)}/pages/${page}/translation-issues/${encodeURIComponent(issue.item_id)}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            revision: issue.revision,
-            translation: value.translation,
-            meaning: value.meaning,
-            phonetic: value.phonetic,
-          }),
-        },
-      );
-      await reload();
-      notice(`${issue.item_type === "word" ? "单词" : "整句"}“${issue.source_text}”已人工修正并通过`);
-    });
-  }
-
   if (!draftId || !Number.isSafeInteger(page) || page < 1) {
         setQueue((await api<ReviewQueueItem[]>("/admin/audio-review")) || []);
         setDetail(null);
@@ -126,6 +91,53 @@ export default function AudioReviewPage({
     } finally {
       setLoading(false);
     }
+  }
+
+  function translationValue(issue: Row) {
+    return translationDrafts[issue.item_id] || {
+      translation: issue.translation || "",
+      meaning: issue.meaning || "",
+      phonetic: issue.phonetic || "",
+    };
+  }
+
+  function setTranslationValue(
+    issue: Row,
+    patch: Partial<{ translation: string; meaning: string; phonetic: string }>,
+  ) {
+    setTranslationDrafts((current) => ({
+      ...current,
+      [issue.item_id]: {
+        ...(current[issue.item_id] || {
+          translation: issue.translation || "",
+          meaning: issue.meaning || "",
+          phonetic: issue.phonetic || "",
+        }),
+        ...patch,
+      },
+    }));
+  }
+
+  async function saveTranslationIssue(issue: Row) {
+    const value = translationValue(issue);
+    await run(async () => {
+      await api(
+        `/admin/drafts/${encodeURIComponent(draftId)}/pages/${page}/translation-issues/${encodeURIComponent(issue.item_id)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            revision: issue.revision,
+            translation: value.translation,
+            meaning: value.meaning,
+            phonetic: value.phonetic,
+          }),
+        },
+      );
+      await reload();
+      notice(
+        `${issue.item_type === "word" ? "单词" : "整句"}“${issue.source_text}”已人工修正并通过`,
+      );
+    });
   }
 
   useEffect(() => {
