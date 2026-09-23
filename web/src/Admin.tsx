@@ -1749,7 +1749,14 @@ function Drafts({
                   ) : null}
                   {job.error && (
                     <div className="job-error">
-                      <strong>{readableJobError(job.error)}</strong>
+                      <strong>{readableJobError(job.error).split("\n")[0]}</strong>
+                      {job.kind === "translate" && job.error.includes("翻译结果需要人工审核") && (
+                        <ul className="translation-review-job-details">
+                          {job.error.split("\n").slice(1).filter((line: string) => line.trim()).map((line: string, index: number) => (
+                            <li key={index}>{line.replace(/^\s*-\s*/, "")}</li>
+                          ))}
+                        </ul>
+                      )}
                       {isAudioJob && audioIssues.length > 0 && (
                         <p><button onClick={() => openAudioReview(id, pageNo)}>前往人工审核页面（{audioIssues.length} 项）</button></p>
                       )}
