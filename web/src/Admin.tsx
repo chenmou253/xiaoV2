@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type AIModel, type AIModelSettings, type AIVoice, type Book, type Identity, type SiteSetting } from "./api";
+import { api, type AdminBook, type AIModel, type AIModelSettings, type AIVoice, type Identity, type SiteSetting } from "./api";
 import AudioReviewPage from "./AudioReviewPage";
 import DraftPageEditor from "./DraftPageEditor";
 import "./admin-job-progress.css";
@@ -131,7 +131,7 @@ export default function Admin() {
       if (target === "site-settings")
         next = (await api<SiteSetting[]>("/admin/site-settings")) || [];
       else if (target === "books")
-        next = (await api<Book[]>("/admin/books")) || [];
+        next = (await api<AdminBook[]>("/admin/books")) || [];
       else if (target === "students")
         next = (await api<Row[]>("/admin/students")) || [];
       else if (target === "rbac") {
@@ -443,7 +443,7 @@ function Books({
   canEdit,
   run,
 }: {
-  rows: (Book & { revision: number })[];
+  rows: AdminBook[];
   canPublish: boolean;
   canEdit: boolean;
   run: any;
