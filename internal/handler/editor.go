@@ -225,6 +225,50 @@ func (h *EditorHandler) AudioIssues(c *gin.Context) {
 	}
 	success(c, issues)
 }
+func (h *EditorHandler) TranslationIssues(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	issues, e := h.service.TranslationIssues(c.Request.Context(), c.Param("draftId"), p)
+	if e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, issues)
+}
+
+func (h *EditorHandler) ResolveTranslationIssue(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	var in struct {
+		Revision    uint64 `json:"revision"`
+		Translation string `json:"translation"`
+		Meaning     string `json:"meaning"`
+		Phonetic    string `json:"phonetic"`
+	}
+	if !bindJSON(c, &in) {
+		return
+	}
+	if e := h.service.ResolveTranslationIssue(
+		c.Request.Context(),
+		c.Param("draftId"),
+		p,
+		c.Param("itemId"),
+		in.Revision,
+		in.Translation,
+		in.Meaning,
+		in.Phonetic,
+		identity(c).ID,
+	); e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
 func (h *EditorHandler) FailedAudio(c *gin.Context) {
 	p, ok := pageParam(c)
 	if !ok {
