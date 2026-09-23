@@ -489,7 +489,7 @@ class OnlineLLMClient:
         choice = response.choices[0]
         content = choice.message.content
         if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
-            if os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+            if _debug_enabled():
                 print(
                     "[TRANSLATION TRUNCATED RESPONSE]",
                     json.dumps(
@@ -683,6 +683,14 @@ class LocalMLXBackend:
 
 class CompletionTruncated(RuntimeError):
     """The provider stopped at the requested output token cap."""
+
+
+DEBUG_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _debug_enabled() -> bool:
+    """Return whether application-wide debug logging is enabled."""
+    return os.getenv("APP_DEBUG", "").strip().lower() in DEBUG_TRUE_VALUES
 
 
 @dataclass
@@ -1552,7 +1560,7 @@ def log_translation(
         payload["score"] = round(result.score, 4)
     if result.issues:
         payload["issues"] = result.issues
-    if os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+    if _debug_enabled():
         payload["source_preview"] = target[:120]
         payload["translation_preview"] = result.translation[:120]
     prefix = "[TRANSLATION WARNING]" if result.review != "PASS" else "[TRANSLATION]"
@@ -1590,7 +1598,7 @@ def log_failure(
         payload["batch_total"] = batch_total
     if isinstance(error, json.JSONDecodeError):
         payload.update({"line": error.lineno, "column": error.colno, "position": error.pos})
-    if raw is not None and os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+    if raw is not None and _debug_enabled():
         payload["response_preview"] = raw[:1200]
         if isinstance(error, json.JSONDecodeError):
             start = max(0, error.pos - 240)
