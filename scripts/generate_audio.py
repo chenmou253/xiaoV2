@@ -225,6 +225,11 @@ class AudioGenerator:
             relative = Path(f"page-{item.page:03d}") / "words" / segment / word / f"{accent}-{generation_id}.wav"
         return output / relative, relative
 
+    def _page_reuse_key(self, item: AudioItem) -> tuple[str, str, str, str]:
+        """Identify one TTS request that may be shared within the current page."""
+        source = spoken_text(normalized_word(item.text) if item.kind == "word" else item.text)
+        return item.kind, source, item.accent, item.voice
+
     def _synthesize(self, item: AudioItem, attempt: int, retry_variant: int = 0):
         source = spoken_text(normalized_word(item.text) if item.kind == "word" else item.text)
         samples, sample_rate, generation = self.engine.synthesize(
@@ -318,12 +323,108 @@ class AudioGenerator:
         summary = {"page": page, "generation_id": generation_id, "total": len(items),
                    "passed": 0, "reused": 0, "failed": 0, "retried": 0,
                    "failed_items": []}
+        # Deduplicate identical TTS requests inside this page. Different accents,
+        # voices, and sentence/word modes stay independent.
+        page_results: dict[tuple[str, str, str, str], dict] = {}
         qa_log_path = qa_dir / f"page-{page:03d}.jsonl"
         if items:
             emit({"event": "progress", "page": page, "progress": 0,
                   "total": len(items), "passed": 0, "failed": 0})
         for index, item in enumerate(items, 1):
             word_cache_key = self._word_cache_key(item)
+            page_key = self._page_reuse_key(item)
+            page_result = page_results.get(page_key)
+            if page_result is not None:
+                if page_result["status"] == "ready":
+                    source_entry = page_result["entry"]
+                    reused_qa = json.loads(json.dumps(source_entry.get("qa", {})))
+                    reused_qa.update({
+                        "passed": True, "reused": True, "page_reused": True,
+                        "page": page, "segment_id": item.segment_id,
+                        "item_id": item.item_id, "word_index": item.word_index,
+                        "text": item.text, "context": item.context,
+                        "accent": item.accent, "voice": item.voice,
+                    })
+                    entry = {
+                        "page": page, "item_id": item.item_id,
+                        "segment_id": item.segment_id, "word_index": item.word_index,
+                        "kind": item.kind, "text": item.text, "context": item.context,
+                        "accent": item.accent, "voice": item.voice,
+                        "tts_model": self._model(),
+                        "generation_id": source_entry.get("generation_id", ""),
+                        "generation_version": source_entry.get("generation_version", ""),
+                        "generated_at": source_entry.get("generated_at", ""),
+                        "status": "ready", "file": source_entry["file"],
+                        "reused_from": {
+                            "page": source_entry.get("page"),
+                            "item_id": source_entry.get("item_id"),
+                            "generation_id": source_entry.get("generation_id", ""),
+                        },
+                        "qa": reused_qa,
+                    }
+                    if word_cache_key:
+                        entry["word_cache_key"] = word_cache_key
+                    self._replace_manifest_item(manifest, item, entry)
+                    _atomic_json(manifest_path, manifest)
+                    summary["passed"] += 1
+                    summary["reused"] += 1
+                    with qa_log_path.open("a", encoding="utf-8") as log:
+                        log.write(json.dumps(reused_qa, ensure_ascii=False) + "\n")
+                    emit({"event": "qa", "qa": reused_qa})
+                    emit({"event": "progress", "page": page, "progress": index,
+                          "total": len(items), "passed": summary["passed"],
+                          "failed": summary["failed"], "reused": summary["reused"]})
+                    continue
+
+                source_failure = json.loads(json.dumps(page_result["failure"]))
+                duplicate_failure = source_failure
+                duplicate_failure.update({
+                    "page": page, "segment_id": item.segment_id,
+                    "item_id": item.item_id, "word_index": item.word_index,
+                    "text": item.text, "context": item.context,
+                    "accent": item.accent, "voice": item.voice,
+                    "reused": True, "page_reused": True,
+                })
+                source_failed_file = str(source_failure.get("failed_file", ""))
+                duplicate_failed_file = ""
+                debug = failed_root / _safe_component(item.item_id, item.kind) / item.accent
+                shutil.rmtree(debug, ignore_errors=True)
+                debug.mkdir(parents=True, exist_ok=True)
+                if source_failed_file:
+                    source_failed_path = output / source_failed_file
+                    if source_failed_path.is_file():
+                        duplicate_failed_path = debug / f"{generation_id}-reused.wav"
+                        shutil.copyfile(source_failed_path, duplicate_failed_path)
+                        duplicate_failed_file = duplicate_failed_path.relative_to(output).as_posix()
+                duplicate_failure["failed_file"] = duplicate_failed_file
+                duplicate_failure["generation_version"] = generation_id
+                duplicate_failure["generated_at"] = datetime.now(timezone.utc).isoformat()
+                duplicate_failure["status"] = "failed"
+                _atomic_json(debug / f"{generation_id}.json", duplicate_failure)
+                manifest["failures"] = [
+                    failure for failure in manifest.get("failures", [])
+                    if not (
+                        int(failure.get("page", 0)) == page
+                        and str(failure.get("item_id", "")) == item.item_id
+                        and str(failure.get("accent", "")) == item.accent
+                    )
+                ]
+                manifest.setdefault("failures", []).append(duplicate_failure)
+                _atomic_json(manifest_path, manifest)
+                summary["failed"] += 1
+                reasons = list(duplicate_failure.get("reasons", ["unknown_audio_failure"]))
+                summary["failed_items"].append({
+                    "item_id": item.item_id, "accent": item.accent,
+                    "voice": item.voice, "reasons": reasons,
+                })
+                with qa_log_path.open("a", encoding="utf-8") as log:
+                    log.write(json.dumps(duplicate_failure, ensure_ascii=False) + "\n")
+                emit({"event": "qa", "qa": duplicate_failure})
+                emit({"event": "progress", "page": page, "progress": index,
+                      "total": len(items), "passed": summary["passed"],
+                      "failed": summary["failed"], "reused": summary["reused"]})
+                continue
+
             reusable = None
             if mode != "replace-item":
                 reusable = self._reusable_word(
@@ -369,6 +470,7 @@ class AudioGenerator:
                 emit({"event": "progress", "page": page, "progress": index,
                       "total": len(items), "passed": summary["passed"],
                       "failed": summary["failed"], "reused": summary["reused"]})
+                page_results[page_key] = {"status": "ready", "entry": entry}
                 continue
             # A word has one canonical audio file for the whole textbook.
             # Explicit regeneration skips cache *reuse* above, but still writes
@@ -467,6 +569,7 @@ class AudioGenerator:
                     entry["word_cache_key"] = word_cache_key
                 self._replace_manifest_item(manifest, item, entry)
                 _atomic_json(manifest_path, manifest)
+                page_results[page_key] = {"status": "ready", "entry": entry}
                 debug = failed_root / _safe_component(item.item_id, item.kind) / item.accent
                 shutil.rmtree(debug, ignore_errors=True)
             else:
@@ -507,6 +610,7 @@ class AudioGenerator:
                 ]
                 manifest.setdefault("failures", []).append(last_result)
                 _atomic_json(manifest_path, manifest)
+                page_results[page_key] = {"status": "failed", "failure": json.loads(json.dumps(last_result))}
             emit({"event": "progress", "page": page, "progress": index,
                   "total": len(items), "passed": summary["passed"],
                   "failed": summary["failed"]})
