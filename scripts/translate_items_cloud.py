@@ -92,9 +92,18 @@ def main() -> None:
             vals=res.get("t")
             if not isinstance(vals,list) or len(vals)!=len(sentences):
                 raise ValueError("sentence translation result count mismatch")
-            cleaned=[clean_translation(x) for x in vals]
-            if any(not x for x in cleaned):
-                raise ValueError("sentence translation contains an empty result")
+            cleaned=[]
+            for index, raw_translation in enumerate(vals):
+                source = sentences[index]
+                translation = clean_translation(raw_translation)
+                if not translation:
+                    raise ValueError(
+                        "sentence translation contains an empty result: "
+                        f"index={index}, source={source!r}, "
+                        f"raw_translation={raw_translation!r}, "
+                        f"cleaned_translation={translation!r}"
+                    )
+                cleaned.append(translation)
             out["translations"]=cleaned
         if words:
             word_schema=exact_array_schema("r", {
