@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Compact cloud translation protocol for textbook_translation_items.
+"""Cloud translation protocol for textbook_translation_items.
+
+Sentences stay batched, but every row carries an explicit index and source text
+so response ordering is never trusted. Words are requested one at a time, which
+removes cross-word result shifting entirely.
 
 Input:
 {"sentences":["..."],"words":["..."]}
@@ -14,35 +18,22 @@ from typing import Any
 from translate_page import configured_backend, OnlineLLMClient, clean_phonetic, clean_translation
 
 SENTENCE_SYSTEM = """Translate English textbook sentences into accurate, natural Simplified Chinese suitable for primary-school students.
-Preserve meaning, names, numbers and negation. Do not add or omit information."""
+For every input row, copy "i" and "s" exactly and add "t" with the Chinese translation.
+Do not reorder rows. Preserve meaning, names, numbers and negation. Do not add or omit information."""
 
-WORD_SYSTEM = """For each English word, return exactly one object with:
+WORD_SYSTEM = """Translate exactly ONE English word independently, without sentence context.
+Return:
 - "m": one concise Simplified Chinese dictionary meaning suitable for primary-school students.
 - "p": General American English IPA only.
 
 Rules:
-- Treat every word independently. Never infer sentence context.
-- Preserve input order.
 - "m" MUST contain Chinese meaning, never IPA.
 - "p" MUST contain IPA, never Chinese translation.
 - Ignore surrounding punctuation when determining pronunciation and meaning.
 - Use rhotic General American pronunciation.
 - Use American /oʊ/ rather than British /əʊ/ where applicable.
-- Include lexical stress where appropriate."""
-
-SENTENCE_SCHEMA: dict[str, Any] = {
-    "type":"object","additionalProperties":False,
-    "properties":{"t":{"type":"array","items":{"type":"string"}}},
-    "required":["t"],
-}
-WORD_SCHEMA: dict[str, Any] = {
-    "type":"object","additionalProperties":False,
-    "properties":{"r":{"type":"array","items":{
-        "type":"array","prefixItems":[{"type":"string"},{"type":"string"}],
-        "minItems":2,"maxItems":2
-    }}},
-    "required":["r"],
-}
+- Include lexical stress where appropriate.
+- Do not return another word's meaning or pronunciation."""
 
 def exact_array_schema(key: str, item_schema: dict[str, Any], count: int) -> dict[str, Any]:
     return {
@@ -87,46 +78,87 @@ def main() -> None:
     out={"translations":[],"words":[]}
     try:
         if sentences:
-            sentence_schema=exact_array_schema("t", {"type":"string"}, len(sentences))
-            res=call(backend,SENTENCE_SYSTEM,{"s":sentences},sentence_schema,"sentence_translations",max(256,64+len(sentences)*64))
-            vals=res.get("t")
-            if not isinstance(vals,list) or len(vals)!=len(sentences):
-                raise ValueError("sentence translation result count mismatch")
-            # Empty sentence translations are intentionally preserved here.
-            # The service layer sends them to local review / manual review instead
-            # of aborting the whole page translation job.
-            out["translations"]=[clean_translation(x) for x in vals]
-        if words:
-            word_schema=exact_array_schema("r", {
-                "type":"object",
-                "additionalProperties":False,
-                "properties":{
-                    "m":{"type":"string","minLength":1},
-                    "p":{"type":"string","minLength":1},
+            sentence_row_schema = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "i": {"type": "integer"},
+                    "s": {"type": "string"},
+                    "t": {"type": "string"},
                 },
-                "required":["m","p"],
-            }, len(words))
-            res=call(backend,WORD_SYSTEM,{"w":words},word_schema,"word_translations",max(512,96+len(words)*40))
-            vals=res.get("r")
-            if not isinstance(vals,list) or len(vals)!=len(words):
-                raise ValueError("word translation result count mismatch")
-            cleaned=[]
-            for index, row in enumerate(vals):
-                source = words[index]
-                if not isinstance(row,dict):
-                    raise ValueError(f"invalid word translation row: word={source!r}, row={row!r}")
+                "required": ["i", "s", "t"],
+            }
+            sentence_schema = exact_array_schema("r", sentence_row_schema, len(sentences))
+            sentence_input = [{"i": index, "s": source} for index, source in enumerate(sentences)]
+            res = call(
+                backend,
+                SENTENCE_SYSTEM,
+                {"r": sentence_input},
+                sentence_schema,
+                "sentence_translations",
+                max(256, 96 + len(sentences) * 80),
+            )
+            vals = res.get("r")
+            if not isinstance(vals, list) or len(vals) != len(sentences):
+                raise ValueError("sentence translation result count mismatch")
+            translations: list[str | None] = [None] * len(sentences)
+            seen_indexes: set[int] = set()
+            for row in vals:
+                if not isinstance(row, dict):
+                    raise ValueError(f"invalid sentence translation row: {row!r}")
+                index = row.get("i")
+                if not isinstance(index, int) or index < 0 or index >= len(sentences):
+                    raise ValueError(f"invalid sentence translation index: {index!r}")
+                if index in seen_indexes:
+                    raise ValueError(f"duplicate sentence translation index: {index}")
+                seen_indexes.add(index)
+                returned_source = str(row.get("s", "")).strip()
+                if returned_source != sentences[index]:
+                    raise ValueError(
+                        "sentence translation source mismatch: "
+                        f"index={index}, expected={sentences[index]!r}, returned={returned_source!r}"
+                    )
+                # Empty sentence translations are intentionally preserved. The
+                # service layer routes them to manual review.
+                translations[index] = clean_translation(row.get("t", ""))
+            if any(value is None for value in translations):
+                raise ValueError("sentence translation response is missing an index")
+            out["translations"] = [value or "" for value in translations]
+
+        if words:
+            word_schema = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "m": {"type": "string", "minLength": 1},
+                    "p": {"type": "string", "minLength": 1},
+                },
+                "required": ["m", "p"],
+            }
+            cleaned = []
+            for index, source in enumerate(words):
+                # One source word per API request. There is no batch array whose
+                # rows can shift and silently attach another word's result.
+                row = call(
+                    backend,
+                    WORD_SYSTEM,
+                    {"w": source},
+                    word_schema,
+                    "word_translation",
+                    160,
+                )
                 raw_meaning = row.get("m", "")
                 raw_phonetic = row.get("p", "")
-                meaning=clean_translation(raw_meaning)
-                phonetic=clean_phonetic(raw_phonetic)
+                meaning = clean_translation(raw_meaning)
+                phonetic = clean_phonetic(raw_phonetic)
                 if not meaning or not phonetic:
                     raise ValueError(
                         "word translation contains incomplete meaning/phonetic: "
-                        f"word={source!r}, raw_meaning={raw_meaning!r}, "
+                        f"index={index}, word={source!r}, raw_meaning={raw_meaning!r}, "
                         f"raw_phonetic={raw_phonetic!r}, meaning={meaning!r}, phonetic={phonetic!r}"
                     )
-                cleaned.append([meaning,phonetic])
-            out["words"]=cleaned
+                cleaned.append([meaning, phonetic])
+            out["words"] = cleaned
         args.output.write_text(json.dumps(out,ensure_ascii=False,separators=(",",":"))+"\n",encoding="utf-8")
     finally:
         logger=getattr(backend,"log_summary",None)
