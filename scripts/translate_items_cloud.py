@@ -12,10 +12,10 @@ Output:
 {"translations":["..."],"words":[["meaning","phonetic"]]}
 """
 from __future__ import annotations
-import argparse, json
+import argparse, json, unicodedata
 from pathlib import Path
 from typing import Any
-from translate_page import configured_backend, OnlineLLMClient, clean_phonetic, clean_translation
+from translate_page import configured_backend, OnlineLLMClient, clean_translation
 
 SENTENCE_SYSTEM = """Translate English textbook sentences into accurate, natural Simplified Chinese suitable for primary-school students.
 For every input row, copy "i" and "s" exactly and add "t" with the Chinese translation.
@@ -34,6 +34,21 @@ Rules:
 - Use American /oʊ/ rather than British /əʊ/ where applicable.
 - Include lexical stress where appropriate.
 - Do not return another word's meaning or pronunciation."""
+
+def normalize_cloud_word(value: Any) -> str:
+    """Remove surrounding punctuation before sending one word to the cloud LLM.
+
+    Internal punctuation such as the apostrophe in "children's" is preserved.
+    The database source_text is not changed.
+    """
+    text = str(value or "").strip()
+    start, end = 0, len(text)
+    while start < end and unicodedata.category(text[start]).startswith("P"):
+        start += 1
+    while end > start and unicodedata.category(text[end - 1]).startswith("P"):
+        end -= 1
+    return text[start:end].strip()
+
 
 def exact_array_schema(key: str, item_schema: dict[str, Any], count: int) -> dict[str, Any]:
     return {
@@ -137,12 +152,17 @@ def main() -> None:
             }
             cleaned = []
             for index, source in enumerate(words):
+                # Keep source_text unchanged in the database, but remove
+                # surrounding OCR/textbook punctuation before the cloud request.
+                request_word = normalize_cloud_word(source)
+                if not request_word:
+                    raise ValueError(f"word is empty after punctuation cleanup: index={index}, word={source!r}")
                 # One source word per API request. There is no batch array whose
                 # rows can shift and silently attach another word's result.
                 row = call(
                     backend,
                     WORD_SYSTEM,
-                    {"w": source},
+                    {"w": request_word},
                     word_schema,
                     "word_translation",
                     160,
@@ -150,12 +170,15 @@ def main() -> None:
                 raw_meaning = row.get("m", "")
                 raw_phonetic = row.get("p", "")
                 meaning = clean_translation(raw_meaning)
-                phonetic = clean_phonetic(raw_phonetic)
+                # Do not validate or rewrite Qwen's IPA here. Local Review is the
+                # quality gate; preserve the cloud model's value except whitespace.
+                phonetic = str(raw_phonetic or "").strip()
                 if not meaning or not phonetic:
                     raise ValueError(
                         "word translation contains incomplete meaning/phonetic: "
-                        f"index={index}, word={source!r}, raw_meaning={raw_meaning!r}, "
-                        f"raw_phonetic={raw_phonetic!r}, meaning={meaning!r}, phonetic={phonetic!r}"
+                        f"index={index}, word={source!r}, request_word={request_word!r}, "
+                        f"raw_meaning={raw_meaning!r}, raw_phonetic={raw_phonetic!r}, "
+                        f"meaning={meaning!r}, phonetic={phonetic!r}"
                     )
                 cleaned.append([meaning, phonetic])
             out["words"] = cleaned
