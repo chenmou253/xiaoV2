@@ -77,12 +77,12 @@ type daemonScanResult struct {
 	err  error
 }
 
-type localTranslationIssuesError struct {
+type translationIssuesError struct {
 	Count int
 }
 
-func (e localTranslationIssuesError) Error() string {
-	return fmt.Sprintf("%d 条本地翻译结果需要人工审核", e.Count)
+func (e translationIssuesError) Error() string {
+	return fmt.Sprintf("%d 条翻译结果需要人工审核", e.Count)
 }
 
 
@@ -296,6 +296,8 @@ func stripTranslationFields(content map[string]any) {
 			continue
 		}
 		delete(segment, "translation")
+		delete(segment, "translation_status")
+		delete(segment, "translation_failure_reason")
 		delete(segment, "context")
 		delete(segment, "paragraph")
 		delete(segment, "block_text")
@@ -308,6 +310,8 @@ func stripTranslationFields(content map[string]any) {
 			}
 			delete(word, "meaning")
 			delete(word, "phonetic")
+			delete(word, "translation_status")
+			delete(word, "translation_failure_reason")
 		}
 	}
 }
@@ -409,10 +413,22 @@ func (s *EditorService) hydrateTranslationItems(ctx context.Context, draftID str
 			continue
 		}
 		segmentID, _ := segment["id"].(string)
-		if item, found := byID[segmentID]; found && item.ItemType == "sentence" && item.Translation != nil {
-			segment["translation"] = *item.Translation
+		if item, found := byID[segmentID]; found && item.ItemType == "sentence" {
+			if item.Translation != nil {
+				segment["translation"] = *item.Translation
+			} else {
+				segment["translation"] = ""
+			}
+			segment["translation_status"] = item.Status
+			if item.FailureReason != nil {
+				segment["translation_failure_reason"] = *item.FailureReason
+			} else {
+				segment["translation_failure_reason"] = ""
+			}
 		} else {
 			segment["translation"] = ""
+			segment["translation_status"] = "pending"
+			segment["translation_failure_reason"] = ""
 		}
 		words, _ := segment["words"].([]any)
 		for _, rawWord := range words {
@@ -424,9 +440,17 @@ func (s *EditorService) hydrateTranslationItems(ctx context.Context, draftID str
 			if item, found := byID[wordID]; found && item.ItemType == "word" {
 				word["meaning"] = item.Meaning
 				word["phonetic"] = item.Phonetic
+				word["translation_status"] = item.Status
+				if item.FailureReason != nil {
+					word["translation_failure_reason"] = *item.FailureReason
+				} else {
+					word["translation_failure_reason"] = ""
+				}
 			} else {
 				word["meaning"] = ""
 				word["phonetic"] = ""
+				word["translation_status"] = "pending"
+				word["translation_failure_reason"] = ""
 			}
 		}
 	}
@@ -1468,7 +1492,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if active > 0 {
 				return conflict("已有页面生成任务正在进行")
 			}
-			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: "translate", Page: current.Position, Status: "queued"}).Error; e != nil {
+			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: "translate", Page: current.Position, ModelID: translationModelID, Status: "queued"}).Error; e != nil {
 				return e
 			}
 		}
@@ -1919,7 +1943,7 @@ func (s *EditorService) runOne(ctx context.Context) (bool, error) {
 	msg := ""
 	if runErr != nil {
 		status, ds, msg = "failed", "failed", runErr.Error()
-		var localIssues localTranslationIssuesError
+		var localIssues translationIssuesError
 		if errors.As(runErr, &localIssues) {
 			status, ds = "issues", "draft"
 		}
@@ -2351,6 +2375,7 @@ func (s *EditorService) translateCloudItems(ctx context.Context, job *model.Text
 	job.Progress,job.Total=0,len(items); _=s.db.Model(job).Updates(map[string]any{"progress":0,"total":len(items)}).Error
 	if len(items)==0{return nil}
 	provider:=""; if info,ok:=ai.Find(modelID);ok{provider=info.Provider}
+	issues:=0
 	misses:=make([]model.TextbookTranslationItem,0,len(items))
 	for _,item:=range items {
 		key:=normalizeTranslationLookup(item.SourceText); var cached model.TextbookTranslationItem
@@ -2373,11 +2398,13 @@ func (s *EditorService) translateCloudItems(ctx context.Context, job *model.Text
 		raw,_:=json.Marshal(cloudTranslationPayload{Sentences:sentences,Words:words});if err:=os.WriteFile(input,raw,0640);err!=nil{return err}
 		cmd:=exec.CommandContext(ctx,s.cfg.Python,filepath.Join("scripts","translate_items_cloud.py"),"--input",input,"--output",output,"--model-id",modelID);cmd.Dir=filepath.Dir(filepath.Dir(s.cfg.ResourceRoot));cmd.Env=append(os.Environ(),"RESOURCE_ROOT="+work);var stderr strings.Builder;cmd.Stderr=&stderr;cmd.Stdout=os.Stdout
 		if err:=cmd.Run();err!=nil{return fmt.Errorf("translate items: %w: %s",err,strings.TrimSpace(stderr.String()))};outRaw,err:=os.ReadFile(output);if err!=nil{return err};var result cloudTranslationResult;if err=json.Unmarshal(outRaw,&result);err!=nil{return err};if len(result.Translations)!=len(sentences)||len(result.Words)!=len(words){return errors.New("cloud translation result count mismatch")}
-		for i,source:=range sentences{translation:=strings.TrimSpace(result.Translations[i]);for _,id:=range sentenceIDs[source]{status,reason:="translated","";if translation==""{status="review_warning";reason="cloud sentence translation is empty; manual review required"}else{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_sentence","text":source,"translation":translation,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}}};u:=map[string]any{"translation":translation,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
-		for i,source:=range words{row:=result.Words[i];if len(row)!=2||strings.TrimSpace(row[0])==""||strings.TrimSpace(row[1])==""{return errors.New("incomplete cloud word translation")};meaning,phonetic:=strings.TrimSpace(row[0]),strings.TrimSpace(row[1]);for _,id:=range wordIDs[source]{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_word","text":source,"meaning":meaning,"phonetic":phonetic,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");status,reason:="translated","";if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}};u:=map[string]any{"meaning":meaning,"phonetic":phonetic,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
+		for i,source:=range sentences{translation:=strings.TrimSpace(result.Translations[i]);for _,id:=range sentenceIDs[source]{status,reason:="translated","";if translation==""{status="review_warning";reason="cloud sentence translation is empty; manual review required"}else{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_sentence","text":source,"translation":translation,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}}};if status=="review_warning"{issues++};u:=map[string]any{"translation":translation,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
+		for i,source:=range words{row:=result.Words[i];if len(row)!=2||strings.TrimSpace(row[0])==""||strings.TrimSpace(row[1])==""{return errors.New("incomplete cloud word translation")};meaning,phonetic:=strings.TrimSpace(row[0]),strings.TrimSpace(row[1]);for _,id:=range wordIDs[source]{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_word","text":source,"meaning":meaning,"phonetic":phonetic,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");status,reason:="translated","";if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}};if status=="review_warning"{issues++};u:=map[string]any{"meaning":meaning,"phonetic":phonetic,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
 	}
 	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?",d.ID,current.Position).Updates(map[string]any{"translation_model":modelID,"checked":false,"audio_checked":false,"version":gorm.Expr("version+1")}).Error;err!=nil{return err}
-	return s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?",d.ID).Update("version",gorm.Expr("version+1")).Error
+	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?",d.ID).Update("version",gorm.Expr("version+1")).Error;err!=nil{return err}
+	if issues>0{return translationIssuesError{Count:issues}}
+	return nil
 }
 
 type localTranslationResponse struct {
@@ -2490,7 +2517,7 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 		return e
 	}
 	if issues > 0 {
-		return localTranslationIssuesError{Count: issues}
+		return translationIssuesError{Count: issues}
 	}
 	return nil
 }
