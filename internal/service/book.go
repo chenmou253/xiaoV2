@@ -29,10 +29,7 @@ type Book struct {
 	Grade       string    `json:"grade"`
 	Semester    string    `json:"semester"`
 	Cover       string    `json:"cover"`
-	Status      string    `json:"status"`
 	PageCount   int       `json:"page_count"`
-	Sort        int       `json:"sort"`
-	Revision    uint64    `json:"revision"`
 	Audio       BookAudio `json:"audio"`
 }
 
@@ -224,39 +221,19 @@ func (s *BookService) AudioFile(ctx context.Context, bookID string, position int
 	if !bookAccentEnabled(book, accent) {
 		return "", ErrNotFound
 	}
-	page, err := s.pageContent(ctx, bookID, position)
-	if err != nil {
+	// Runtime audio lookup trusts the published database row plus the audio
+	// manifest. Do not read the whole page JSON just to validate one item.
+	if _, err = s.repository.FindPage(ctx, bookID, position); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", ErrNotFound
+		}
 		return "", err
 	}
-	var content struct {
-		Segments []struct {
-			ID        string `json:"id"`
-			Text      string `json:"text"`
-			AudioMode string `json:"audio_mode"`
-			Words     []struct {
-				ID   string `json:"id"`
-				Text string `json:"text"`
-			} `json:"words"`
-		} `json:"segments"`
+	path, err := s.resources.AudioItemFile(bookID, position, itemID, accent)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", ErrNotFound
 	}
-	wrapped, _ := json.Marshal(map[string]json.RawMessage{"segments": page.Segments})
-	if err = json.Unmarshal(wrapped, &content); err != nil {
-		return "", err
-	}
-	for _, segment := range content.Segments {
-		if segment.ID == itemID && segment.AudioMode != "word_only" && segment.AudioMode != "none" {
-			return s.resources.AudioItemFile(bookID, position, segment.ID, accent)
-		}
-		for _, word := range segment.Words {
-			if word.ID == itemID {
-				if segment.AudioMode == "none" || !resource.HasSpeakableText(word.Text) {
-					return "", ErrNotFound
-				}
-				return s.resources.AudioItemFile(bookID, position, word.ID, accent)
-			}
-		}
-	}
-	return "", ErrNotFound
+	return path, err
 }
 
 func (s *BookService) toBook(item model.Book) Book {
@@ -272,8 +249,7 @@ func (s *BookService) toBook(item model.Book) Book {
 	return Book{
 		BookID: item.BookID, Title: item.Title, Subtitle: item.Subtitle,
 		Description: item.Description, Publisher: item.Publisher, Grade: item.Grade,
-		Semester: item.Semester, Cover: cover, Status: item.Status,
-		PageCount: item.PageCount, Sort: item.Sort, Revision: item.Revision,
+		Semester: item.Semester, Cover: cover, PageCount: item.PageCount,
 		Audio: BookAudio{AvailableAccents: available, DefaultAccent: defaultAccent},
 	}
 }
