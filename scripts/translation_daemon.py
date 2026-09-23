@@ -17,6 +17,7 @@ JSON for the Go service.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -64,13 +65,43 @@ hospital
 """
 
 
-REVIEW_SENTENCE_SYSTEM_PROMPT = """Review an English textbook sentence translation for primary-school students.
-Return exactly one line: PASS if it is accurate and natural, otherwise WARNING followed by a short reason.
-Check omissions, additions, mistranslation, names, numbers and negation. Do not rewrite correct text."""
+REVIEW_SENTENCE_SYSTEM_PROMPT = """You are a strict translation quality gate for Chinese primary-school English textbooks.
+Compare the English SOURCE with the Chinese CANDIDATE semantically.
 
-REVIEW_WORD_SYSTEM_PROMPT = """Review one English word's Chinese dictionary meaning and General American IPA independently, without sentence context.
-Return exactly one line: PASS if both are acceptable, otherwise WARNING followed by a short reason.
-Check that the Chinese meaning is concise and that IPA is General American, rhotic, and has appropriate lexical stress."""
+Return exactly ONE line:
+PASS
+or
+WARNING: <short reason>
+
+Return WARNING if ANY of these is true:
+- any source meaning is omitted
+- the candidate adds meaning not present in the source
+- an action, subject, object, place, time, name, number, negation, or other important detail is wrong
+- only part of the source is translated
+- the candidate is unrelated to the source
+- the candidate is suspiciously incomplete
+- you are uncertain whether the meanings match
+
+Do not be lenient. Natural Chinese is not enough: the full source meaning must be preserved.
+Never output PASS with an explanation. If there is any concern, output WARNING."""
+
+REVIEW_WORD_SYSTEM_PROMPT = """You are a strict vocabulary quality gate for Chinese primary-school English textbooks.
+Review one SOURCE WORD independently, without sentence context, against its CANDIDATE MEANING and CANDIDATE IPA.
+
+Return exactly ONE line:
+PASS
+or
+WARNING: <short reason>
+
+Return WARNING if ANY of these is true:
+- the Chinese meaning is wrong, unrelated, too broad, too narrow, or not a concise common dictionary meaning
+- the IPA is not a plausible General American pronunciation
+- rhotic /r/ is missing where General American requires it
+- lexical stress is missing or wrong where it matters
+- the IPA contains ordinary spelling, labels, or non-IPA explanation
+- you are uncertain whether either field is correct
+
+Never output PASS with an explanation. If there is any concern, output WARNING."""
 
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 MEANING_LABEL_RE = re.compile(r"^(?:meaning|chinese meaning|词义|中文词义)\s*[:：]\s*", re.IGNORECASE)
@@ -151,6 +182,44 @@ def parse_word_result(value: str, source_word: str) -> tuple[str, str]:
     return meaning, phonetic
 
 
+DEBUG_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _debug_enabled() -> bool:
+    return os.getenv("APP_DEBUG", "").strip().lower() in DEBUG_TRUE_VALUES
+
+
+def _parse_review_result(value: str) -> tuple[bool, str, str]:
+    line = " ".join(_content_lines(value)).strip()
+    if line.upper() == "PASS":
+        return True, "", line
+    if not line:
+        return False, "invalid review response: empty", line
+    if re.match(r"^WARNING(?:\\s*[:：-]\\s*|\\s+).+", line, re.IGNORECASE):
+        return False, line[:500], line
+    return False, f"invalid review response: {line[:450]}", line
+
+
+def _debug_review(task: str, source: str, candidate: object, raw_review: str, passed: bool) -> None:
+    if not _debug_enabled():
+        return
+    print(
+        "[TRANSLATION REVIEW] "
+        + json.dumps(
+            {
+                "task": task,
+                "source": source,
+                "candidate": candidate,
+                "raw_review": raw_review,
+                "passed": passed,
+            },
+            ensure_ascii=False,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def sentence_user_prompt(text: str) -> str:
     return text
 
@@ -207,10 +276,23 @@ def main() -> None:
                 if not candidate:
                     raise ValueError("review sentence candidate is empty")
                 backend.set_operation("本地句子审核", request_type="sentence_review")
-                result = backend.generate(REVIEW_SENTENCE_SYSTEM_PROMPT, text + "\n" + candidate, 96)
-                line = " ".join(_content_lines(result)).strip()
-                passed = line.upper().startswith("PASS")
-                print(json.dumps({"done": True, "task": task, "passed": passed, "reason": "" if passed else line[:500], "model_id": model_id}, ensure_ascii=False), flush=True)
+                review_prompt = f"SOURCE:\n{text}\n\nCANDIDATE:\n{candidate}"
+                result = backend.generate(REVIEW_SENTENCE_SYSTEM_PROMPT, review_prompt, 96)
+                passed, reason, raw_review = _parse_review_result(result)
+                _debug_review(task, text, candidate, raw_review, passed)
+                print(
+                    json.dumps(
+                        {
+                            "done": True,
+                            "task": task,
+                            "passed": passed,
+                            "reason": reason,
+                            "model_id": model_id,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
                 continue
 
             if task == "review_word":
@@ -219,10 +301,33 @@ def main() -> None:
                 if not meaning or not phonetic:
                     raise ValueError("review word candidate is incomplete")
                 backend.set_operation("本地单词审核", request_type="word_review")
-                result = backend.generate(REVIEW_WORD_SYSTEM_PROMPT, text + "\n" + meaning + "\n" + phonetic, 96)
-                line = " ".join(_content_lines(result)).strip()
-                passed = line.upper().startswith("PASS")
-                print(json.dumps({"done": True, "task": task, "passed": passed, "reason": "" if passed else line[:500], "model_id": model_id}, ensure_ascii=False), flush=True)
+                review_prompt = (
+                    f"SOURCE WORD:\n{text}\n\n"
+                    f"CANDIDATE MEANING:\n{meaning}\n\n"
+                    f"CANDIDATE IPA:\n{phonetic}"
+                )
+                result = backend.generate(REVIEW_WORD_SYSTEM_PROMPT, review_prompt, 96)
+                passed, reason, raw_review = _parse_review_result(result)
+                _debug_review(
+                    task,
+                    text,
+                    {"meaning": meaning, "phonetic": phonetic},
+                    raw_review,
+                    passed,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "done": True,
+                            "task": task,
+                            "passed": passed,
+                            "reason": reason,
+                            "model_id": model_id,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
                 continue
 
             if task == "sentence":
