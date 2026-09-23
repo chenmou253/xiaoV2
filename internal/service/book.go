@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 
 	"xiaov2/internal/model"
 	"xiaov2/internal/repository"
@@ -33,6 +32,7 @@ type Book struct {
 	Status      string    `json:"status"`
 	PageCount   int       `json:"page_count"`
 	Sort        int       `json:"sort"`
+	Revision    uint64    `json:"revision"`
 	Audio       BookAudio `json:"audio"`
 }
 
@@ -84,7 +84,7 @@ func (s *BookService) List(ctx context.Context) ([]Book, error) {
 	}
 	books := make([]Book, 0, len(models))
 	for _, item := range models {
-		books = append(books, s.toBook(ctx, item))
+		books = append(books, s.toBook(item))
 	}
 	return books, nil
 }
@@ -100,11 +100,17 @@ func (s *BookService) Get(ctx context.Context, bookID string) (Book, error) {
 	if err != nil {
 		return Book{}, err
 	}
-	return s.toBook(ctx, book), nil
+	return s.toBook(book), nil
 }
 
 func (s *BookService) Pages(ctx context.Context, bookID string) ([]PageSummary, error) {
-	if _, err := s.Get(ctx, bookID); err != nil {
+	if !resource.ValidBookID(bookID) {
+		return nil, ErrInvalidBookID
+	}
+	if _, err := s.repository.FindPublished(ctx, bookID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	pages, err := s.repository.ListPages(ctx, bookID)
@@ -131,6 +137,10 @@ func (s *BookService) Page(ctx context.Context, bookID string, position int) (Pa
 		}
 		return PageContent{}, err
 	}
+	return s.pageContent(ctx, bookID, position)
+}
+
+func (s *BookService) pageContent(ctx context.Context, bookID string, position int) (PageContent, error) {
 	page, err := s.repository.FindPage(ctx, bookID, position)
 	if errors.Is(err, repository.ErrNotFound) {
 		return PageContent{}, ErrNotFound
@@ -198,18 +208,23 @@ func (s *BookService) PageImageFile(ctx context.Context, bookID string, position
 }
 
 func (s *BookService) AudioFile(ctx context.Context, bookID string, position int, itemID, accent string) (string, error) {
-	book, err := s.Get(ctx, bookID)
+	if !resource.ValidBookID(bookID) {
+		return "", ErrInvalidBookID
+	}
+	if position < 1 {
+		return "", ErrInvalidPage
+	}
+	book, err := s.repository.FindPublished(ctx, bookID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return "", ErrNotFound
+	}
 	if err != nil {
 		return "", err
 	}
-	available := false
-	for _, value := range book.Audio.AvailableAccents {
-		available = available || value == accent
-	}
-	if !available {
+	if !bookAccentEnabled(book, accent) {
 		return "", ErrNotFound
 	}
-	page, err := s.Page(ctx, bookID, position)
+	page, err := s.pageContent(ctx, bookID, position)
 	if err != nil {
 		return "", err
 	}
@@ -244,17 +259,23 @@ func (s *BookService) AudioFile(ctx context.Context, bookID string, position int
 	return "", ErrNotFound
 }
 
-func (s *BookService) toBook(ctx context.Context, item model.Book) Book {
+func (s *BookService) toBook(item model.Book) Book {
 	cover := ""
 	if item.Cover != "" {
 		cover = "/api/v1/books/" + url.PathEscape(item.BookID) + "/cover"
 	}
-	available := s.availableAccents(ctx, item)
+	available := bookAvailableAccents(item)
 	defaultAccent := ""
 	if len(available) > 0 {
 		defaultAccent = available[0]
 	}
-	return Book{BookID: item.BookID, Title: item.Title, Subtitle: item.Subtitle, Description: item.Description, Publisher: item.Publisher, Grade: item.Grade, Semester: item.Semester, Cover: cover, Status: item.Status, PageCount: item.PageCount, Sort: item.Sort, Audio: BookAudio{AvailableAccents: available, DefaultAccent: defaultAccent}}
+	return Book{
+		BookID: item.BookID, Title: item.Title, Subtitle: item.Subtitle,
+		Description: item.Description, Publisher: item.Publisher, Grade: item.Grade,
+		Semester: item.Semester, Cover: cover, Status: item.Status,
+		PageCount: item.PageCount, Sort: item.Sort, Revision: item.Revision,
+		Audio: BookAudio{AvailableAccents: available, DefaultAccent: defaultAccent},
+	}
 }
 
 func normalizeBookAudio(item model.Book) model.Book {
@@ -265,96 +286,32 @@ func normalizeBookAudio(item model.Book) model.Book {
 		item.BritishVoiceID = tts.DefaultBritishVoice
 	}
 	// Existing rows created before these columns are migration version zero.
-	// Historically both accents were always generated, so keep both enabled.
+	// Historically both accents were always enabled.
 	if item.AudioConfigVersion == 0 {
 		item.AmericanEnabled, item.BritishEnabled = true, true
 	}
 	return item
 }
 
-func (s *BookService) availableAccents(ctx context.Context, item model.Book) []string {
+func bookAvailableAccents(item model.Book) []string {
 	item = normalizeBookAudio(item)
-	pages, err := s.repository.ListPages(ctx, item.BookID)
-	if err != nil {
-		return []string{}
-	}
-	type expectedItem struct {
-		page int
-		id   string
-	}
-	expected := make([]expectedItem, 0)
-	for _, page := range pages {
-		path, resolveErr := s.resources.Resolve(item.BookID, page.ContentPath)
-		if resolveErr != nil {
-			return []string{}
-		}
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return []string{}
-		}
-		var content struct {
-			Segments []struct {
-				ID        string `json:"id"`
-				AudioMode string `json:"audio_mode"`
-				Words     []struct {
-					ID   string `json:"id"`
-					Text string `json:"text"`
-				} `json:"words"`
-			} `json:"segments"`
-		}
-		if json.Unmarshal(raw, &content) != nil {
-			return []string{}
-		}
-		for _, segment := range content.Segments {
-			if segment.AudioMode == "none" {
-				continue
-			}
-			if segment.AudioMode != "word_only" && segment.ID != "" {
-				expected = append(expected, expectedItem{page.Position, segment.ID})
-			}
-			for _, word := range segment.Words {
-				if word.ID != "" && resource.HasSpeakableText(word.Text) {
-					expected = append(expected, expectedItem{page.Position, word.ID})
-				}
-			}
-		}
-	}
-	if len(expected) == 0 {
-		return []string{}
-	}
-	legacy := item.AudioConfigVersion == 0
-	configs := []struct {
-		accent, voice string
-		enabled       bool
-	}{
-		{tts.AccentUS, item.AmericanVoiceID, item.AmericanEnabled},
-		{tts.AccentGB, item.BritishVoiceID, item.BritishEnabled},
-	}
 	result := make([]string, 0, 2)
-	for _, config := range configs {
-		if !config.enabled {
-			continue
-		}
-		complete := true
-		for _, wanted := range expected {
-			found := false
-			for _, kind := range []string{"tts", "audio"} {
-				dir, dirErr := s.resources.Dir(item.BookID, kind)
-				if dirErr == nil && resource.AudioItemReadyInDir(filepath.Clean(dir), wanted.page, wanted.id, config.accent, config.voice, legacy) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				complete = false
-				break
-			}
-		}
-		if complete {
-			result = append(result, config.accent)
-		}
+	if item.AmericanEnabled {
+		result = append(result, tts.AccentUS)
+	}
+	if item.BritishEnabled {
+		result = append(result, tts.AccentGB)
 	}
 	return result
+}
+
+func bookAccentEnabled(item model.Book, accent string) bool {
+	for _, value := range bookAvailableAccents(item) {
+		if value == accent {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *BookService) toPage(page model.BookPage) PageSummary {
