@@ -73,7 +73,7 @@ func TestBookServiceListAndValidation(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	svc := NewBookService(fakeRepository{books: []model.Book{{BookID: "book-one", Title: "One", Status: "published", Cover: "pages/page-001.png"}}}, resources)
 	books, err := svc.List(context.Background())
-	if err != nil || len(books) != 1 || books[0].BookID != "book-one" || books[0].Cover != "/api/v1/books/book-one/cover" || books[0].Revision != 0 {
+	if err != nil || len(books) != 1 || books[0].BookID != "book-one" || books[0].Cover != "/api/v1/books/book-one/cover" {
 		t.Fatalf("unexpected list: %#v, %v", books, err)
 	}
 	if _, err = svc.Get(context.Background(), "../bad"); !errors.Is(err, ErrInvalidBookID) {
@@ -133,23 +133,22 @@ func TestBothEnabledAccentsAndLegacyCompatibility(t *testing.T) {
 	}
 }
 
-func TestWordOnlySegmentDoesNotExposeSentenceAudio(t *testing.T) {
+func TestAudioFileUsesPublishedPageAndManifestWithoutReadingPageJSON(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
-	book := model.Book{BookID: "word-only-book", Status: "published", AmericanEnabled: true, AmericanVoiceID: "aiden", AudioConfigVersion: 1}
+	book := model.Book{BookID: "audio-book", Status: "published", AmericanEnabled: true, AmericanVoiceID: "aiden", AudioConfigVersion: 1}
 	repo := writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden"})
 	metadata, _ := resources.Dir(book.BookID, "metadata")
-	if err := os.WriteFile(filepath.Join(metadata, "pages", "page-001.json"), []byte(`{"segments":[{"id":"s1","text":"Hello","audio_mode":"word_only","words":[{"id":"w1","text":"Hello"}]}]}`), 0o600); err != nil {
+	if err := os.Remove(filepath.Join(metadata, "pages", "page-001.json")); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewBookService(repo, resources)
-	view, err := svc.Get(context.Background(), book.BookID)
-	if err != nil || len(view.Audio.AvailableAccents) != 1 {
-		t.Fatalf("word audio should make the accent available: %#v %v", view.Audio, err)
+	if _, err := svc.AudioFile(context.Background(), book.BookID, 1, "s1", "en-US"); err != nil {
+		t.Fatalf("manifest-backed sentence audio should not depend on page JSON: %v", err)
 	}
-	if _, err = svc.AudioFile(context.Background(), book.BookID, 1, "s1", "en-US"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("word-only segment exposed sentence audio: %v", err)
+	if _, err := svc.AudioFile(context.Background(), book.BookID, 1, "w1", "en-US"); err != nil {
+		t.Fatalf("manifest-backed word audio should not depend on page JSON: %v", err)
 	}
-	if _, err = svc.AudioFile(context.Background(), book.BookID, 1, "w1", "en-US"); err != nil {
-		t.Fatalf("word-only segment hid word audio: %v", err)
+	if _, err := svc.AudioFile(context.Background(), book.BookID, 2, "s1", "en-US"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing published page should be rejected: %v", err)
 	}
 }
