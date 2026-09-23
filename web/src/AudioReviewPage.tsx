@@ -39,6 +39,8 @@ export default function AudioReviewPage({
   const [queue, setQueue] = useState<ReviewQueueItem[]>([]);
   const [detail, setDetail] = useState<any>(null);
   const [issues, setIssues] = useState<Row[]>([]);
+  const [translationIssues, setTranslationIssues] = useState<Row[]>([]);
+  const [translationDrafts, setTranslationDrafts] = useState<Record<string, { translation: string; meaning: string; phonetic: string }>>({});
   const [ttsModels, setTTSModels] = useState<Row[]>([]);
   const [voiceOptions, setVoiceOptions] = useState<Record<string, Row[]>>({});
   const [retrySettings, setRetrySettings] = useState<
@@ -52,15 +54,53 @@ export default function AudioReviewPage({
     setLoading(true);
     setError("");
     try {
-      if (!draftId || !Number.isSafeInteger(page) || page < 1) {
+      function translationValue(issue: Row) {
+    return translationDrafts[issue.item_id] || {
+      translation: issue.translation || "",
+      meaning: issue.meaning || "",
+      phonetic: issue.phonetic || "",
+    };
+  }
+
+  function setTranslationValue(issue: Row, patch: Partial<{ translation: string; meaning: string; phonetic: string }>) {
+    setTranslationDrafts((current) => ({
+      ...current,
+      [issue.item_id]: { ...translationValue(issue), ...patch },
+    }));
+  }
+
+  async function saveTranslationIssue(issue: Row) {
+    const value = translationValue(issue);
+    await run(async () => {
+      await api(
+        `/admin/drafts/${encodeURIComponent(draftId)}/pages/${page}/translation-issues/${encodeURIComponent(issue.item_id)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            revision: issue.revision,
+            translation: value.translation,
+            meaning: value.meaning,
+            phonetic: value.phonetic,
+          }),
+        },
+      );
+      await reload();
+      notice(`${issue.item_type === "word" ? "单词" : "整句"}“${issue.source_text}”已人工修正并通过`);
+    });
+  }
+
+  if (!draftId || !Number.isSafeInteger(page) || page < 1) {
         setQueue((await api<ReviewQueueItem[]>("/admin/audio-review")) || []);
         setDetail(null);
         setIssues([]);
+        setTranslationIssues([]);
+        setTranslationDrafts({});
         return;
       }
-      const [status, nextIssues, models] = await Promise.all([
+      const [status, nextIssues, nextTranslationIssues, models] = await Promise.all([
         api<Row>(`/admin/drafts/${encodeURIComponent(draftId)}/status`),
         api<Row[]>(`/admin/drafts/${encodeURIComponent(draftId)}/pages/${page}/audio-issues`),
+        api<Row[]>(`/admin/drafts/${encodeURIComponent(draftId)}/pages/${page}/translation-issues`),
         api<Row[]>(`/admin/drafts/${encodeURIComponent(draftId)}/models`),
       ]);
       setDetail({
@@ -74,6 +114,12 @@ export default function AudioReviewPage({
         jobs: status.jobs || [],
       });
       setIssues(nextIssues || []);
+      setTranslationIssues(nextTranslationIssues || []);
+      setTranslationDrafts(Object.fromEntries((nextTranslationIssues || []).map((issue: Row) => [issue.item_id, {
+        translation: issue.translation || "",
+        meaning: issue.meaning || "",
+        phonetic: issue.phonetic || "",
+      }])));
       setTTSModels((models || []).filter((model) => model.type === "tts"));
     } catch (cause) {
       setError((cause as Error).message);
@@ -281,7 +327,15 @@ export default function AudioReviewPage({
       {loading && !detail ? (
         <p>正在加载审核项…</p>
       ) : (
-        <AudioIssueReview
+        <>
+          <TranslationIssueReview
+            issues={translationIssues}
+            writable={writable}
+            valueFor={translationValue}
+            onChange={setTranslationValue}
+            onSave={saveTranslationIssue}
+          />
+          <AudioIssueReview
           draftId={draftId}
           page={page}
           issues={issues}
@@ -294,8 +348,94 @@ export default function AudioReviewPage({
           settingFor={settingFor}
           onChangeRetrySetting={updateRetrySetting}
         />
+        </>
       )}
     </>
+  );
+}
+
+function TranslationIssueReview({
+  issues,
+  writable,
+  valueFor,
+  onChange,
+  onSave,
+}: {
+  issues: Row[];
+  writable: boolean;
+  valueFor: (issue: Row) => { translation: string; meaning: string; phonetic: string };
+  onChange: (issue: Row, patch: Partial<{ translation: string; meaning: string; phonetic: string }>) => void;
+  onSave: (issue: Row) => Promise<void>;
+}) {
+  return (
+    <section className="translation-issue-review">
+      <header>
+        <div>
+          <h3>翻译异常处理 · 未解决 {issues.length} 项</h3>
+          <p>读取 textbook_translation_items 中 failure_reason 非空的数据；修改并保存后会清除异常并标记为已人工审核。</p>
+        </div>
+      </header>
+      {issues.length === 0 ? (
+        <div className="audio-issue-success">当前页没有翻译异常。</div>
+      ) : (
+        <div className="translation-issue-list">
+          {issues.map((issue) => {
+            const value = valueFor(issue);
+            return (
+              <article className="translation-issue-row" key={issue.item_id}>
+                <div className="translation-issue-copy">
+                  <strong>{issue.source_text}</strong>
+                  <span>{issue.item_type === "word" ? "单词" : "整句"} · {issue.item_id}</span>
+                  <p>{issue.failure_reason}</p>
+                  <small>模型 {issue.translation_model || "—"} · 供应商 {issue.provider || "—"}</small>
+                </div>
+                <div className="translation-issue-controls">
+                  {issue.item_type === "sentence" ? (
+                    <label>
+                      整句翻译
+                      <textarea
+                        rows={3}
+                        value={value.translation}
+                        disabled={!writable}
+                        onChange={(event) => onChange(issue, { translation: event.target.value })}
+                      />
+                    </label>
+                  ) : (
+                    <div className="translation-issue-word-fields">
+                      <label>
+                        词义
+                        <input
+                          value={value.meaning}
+                          disabled={!writable}
+                          onChange={(event) => onChange(issue, { meaning: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        音标
+                        <input
+                          value={value.phonetic}
+                          disabled={!writable}
+                          onChange={(event) => onChange(issue, { phonetic: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <div className="action-row">
+                    <button
+                      className="admin-primary"
+                      disabled={!writable}
+                      onClick={() => void onSave(issue)}
+                    >
+                      保存并标记已审核
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
