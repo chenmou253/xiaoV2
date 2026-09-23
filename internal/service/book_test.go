@@ -73,7 +73,7 @@ func TestBookServiceListAndValidation(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	svc := NewBookService(fakeRepository{books: []model.Book{{BookID: "book-one", Title: "One", Status: "published", Cover: "pages/page-001.png"}}}, resources)
 	books, err := svc.List(context.Background())
-	if err != nil || len(books) != 1 || books[0].BookID != "book-one" || books[0].Cover != "/api/v1/books/book-one/cover" {
+	if err != nil || len(books) != 1 || books[0].BookID != "book-one" || books[0].Cover != "/api/v1/books/book-one/cover" || books[0].Revision != 0 {
 		t.Fatalf("unexpected list: %#v, %v", books, err)
 	}
 	if _, err = svc.Get(context.Background(), "../bad"); !errors.Is(err, ErrInvalidBookID) {
@@ -98,40 +98,38 @@ func TestBookServiceReadsCanonicalPageMetadata(t *testing.T) {
 	}
 }
 
-func TestAvailableAccentsRequireEnabledAndCompleteResources(t *testing.T) {
+func TestAvailableAccentsComeFromPublishedDatabaseState(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	book := model.Book{BookID: "audio-book", Status: "published", AmericanEnabled: true, BritishEnabled: true, AmericanVoiceID: "aiden", BritishVoiceID: "ryan", AudioConfigVersion: 1}
-	repo := writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden"})
+	repo := fakeRepository{books: []model.Book{book}}
 	view, err := NewBookService(repo, resources).Get(context.Background(), book.BookID)
-	if err != nil || len(view.Audio.AvailableAccents) != 1 || view.Audio.AvailableAccents[0] != "en-US" {
-		t.Fatalf("incomplete British resources were exposed: %#v %v", view.Audio, err)
+	if err != nil || len(view.Audio.AvailableAccents) != 2 {
+		t.Fatalf("enabled accents were not exposed from database state: %#v %v", view.Audio, err)
 	}
 
 	book.BritishEnabled = false
-	repo = writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden", "en-GB": "ryan"})
+	repo = fakeRepository{books: []model.Book{book}}
 	view, err = NewBookService(repo, resources).Get(context.Background(), book.BookID)
 	if err != nil || len(view.Audio.AvailableAccents) != 1 || view.Audio.AvailableAccents[0] != "en-US" {
 		t.Fatalf("disabled British accent was exposed: %#v %v", view.Audio, err)
 	}
-	if _, statErr := os.Stat(filepath.Join(resources.Root(), book.BookID, "tts", "en-GB-s1.wav")); statErr != nil {
-		t.Fatalf("disabling accent deleted its file: %v", statErr)
-	}
 }
 
-func TestBothReadyAccentsAndLegacyVoiceCompatibility(t *testing.T) {
+func TestBothEnabledAccentsAndLegacyCompatibility(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	book := model.Book{BookID: "both-book", Status: "published", AmericanEnabled: true, BritishEnabled: true, AmericanVoiceID: "aiden", BritishVoiceID: "ryan", AudioConfigVersion: 1}
-	repo := writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden", "en-GB": "ryan"})
+	repo := fakeRepository{books: []model.Book{book}}
 	view, err := NewBookService(repo, resources).Get(context.Background(), book.BookID)
 	if err != nil || len(view.Audio.AvailableAccents) != 2 {
 		t.Fatalf("expected both accents: %#v %v", view.Audio, err)
 	}
 
 	book.AudioConfigVersion = 0
-	repo = writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "Ryan", "en-GB": "Aiden"})
+	book.AmericanEnabled, book.BritishEnabled = false, false
+	repo = fakeRepository{books: []model.Book{book}}
 	view, err = NewBookService(repo, resources).Get(context.Background(), book.BookID)
 	if err != nil || len(view.Audio.AvailableAccents) != 2 {
-		t.Fatalf("legacy voices stopped working: %#v %v", view.Audio, err)
+		t.Fatalf("legacy audio settings stopped working: %#v %v", view.Audio, err)
 	}
 }
 
