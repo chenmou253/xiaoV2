@@ -5,6 +5,7 @@ import DraftPageEditor from "./DraftPageEditor";
 import "./admin-job-progress.css";
 
 type Row = Record<string, any>;
+type ToastState = { message: string; kind: "success" | "error" } | null;
 type Tab =
   | "drafts"
   | "audio-review"
@@ -80,7 +81,7 @@ export default function Admin() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [toast, setToast] = useState<ToastState>(null);
   const loadID = useRef(0);
   const can = (permission: string) => !!me?.permissions.includes(permission);
   useEffect(() => {
@@ -98,10 +99,19 @@ export default function Admin() {
       .finally(() => setReady(true));
   }, []);
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 8000);
+    if (!toast) return;
+    const timer = window.setTimeout(
+      () => setToast(null),
+      toast.kind === "error" ? 4000 : 2500,
+    );
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [toast]);
+
+  const showNotice = (message: string) =>
+    setToast({ message, kind: "success" as const });
+
+  const showActionError = (message: string) =>
+    setToast({ message, kind: "error" as const });
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
@@ -150,25 +160,23 @@ export default function Admin() {
   }, [tab, me]);
   async function run(work: () => Promise<void>) {
     setBusy(true);
-    setError("");
-    setNotice("");
+    setToast(null);
     try {
       await work();
     } catch (e) {
-      setError((e as Error).message);
+      showActionError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
   async function runResult(work: () => Promise<void>): Promise<boolean> {
     setBusy(true);
-    setError("");
-    setNotice("");
+    setToast(null);
     try {
       await work();
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      showActionError((e as Error).message);
       return false;
     } finally {
       setBusy(false);
@@ -231,9 +239,17 @@ export default function Admin() {
         </header>
         {busy && <p>正在处理…</p>}
         {error && <p className="admin-error">{error}</p>}
-        {notice && <p className="admin-success admin-toast" role="status" aria-live="polite">{notice}</p>}
-        {tab === "drafts" && <Drafts me={me} run={run} runResult={runResult} notice={setNotice} />}
-        {tab === "audio-review" && <AudioReviewPage me={me} run={run} notice={setNotice} refreshToken={refreshToken} />}
+        {toast && (
+          <p
+            className={`admin-toast admin-toast-${toast.kind}`}
+            role={toast.kind === "error" ? "alert" : "status"}
+            aria-live={toast.kind === "error" ? "assertive" : "polite"}
+          >
+            {toast.message}
+          </p>
+        )}
+        {tab === "drafts" && <Drafts me={me} run={run} runResult={runResult} notice={showNotice} />}
+        {tab === "audio-review" && <AudioReviewPage me={me} run={run} notice={showNotice} refreshToken={refreshToken} />}
         {tab === "books" && (
           <Books
             rows={data || []}
