@@ -18,6 +18,8 @@ export async function api<T>(path:string, options?:RequestInit|AbortSignal):Prom
 export type Accent='en-US'|'en-GB';
 export type BookAudio={available_accents:Accent[];default_accent:Accent|''};
 export type Book={book_id:string;title:string;subtitle:string;description:string;publisher:string;grade:string;semester:string;cover:string;page_count:number;audio:BookAudio};
+export type AdminBookAudioStatus={accent:Accent;voice_id:string;ready:number;failed:number;total:number;status:string};
+export type AdminBook={book_id:string;title:string;subtitle:string;description:string;publisher:string;grade:string;semester:string;status:'draft'|'published';page_count:number;sort:number;revision:number;american_enabled:boolean;british_enabled:boolean;american_voice_id:string;british_voice_id:string;audio_config_version:number;audio_status:AdminBookAudioStatus[]};
 export type BookPage={book_id:string;page:number;printed_page:number|null;title:string;unit:string;image:string;interactive:boolean};
 export type Word={id:string;text:string;meaning?:string;phonetic?:string;box?:[number,number,number,number];polygon?:[number,number][];ocr_confidence?:number;ocr_needs_review?:boolean;translation_status?:string;translation_failure_reason?:string};
 export type Segment={id:string;label:string;text:string;translation?:string;anchor?:[number,number]|[number,number,number,number];words:Word[];audio_mode?:'sentence_and_words'|'word_only'|'none';ocr_confidence?:number;ocr_needs_review?:boolean;translation_status?:string;translation_failure_reason?:string};
