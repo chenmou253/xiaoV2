@@ -78,11 +78,16 @@ type daemonScanResult struct {
 }
 
 type translationIssuesError struct {
-	Count int
+	Count   int
+	Details []string
 }
 
 func (e translationIssuesError) Error() string {
-	return fmt.Sprintf("%d 条翻译结果需要人工审核", e.Count)
+	head := fmt.Sprintf("%d 条翻译结果需要人工审核", e.Count)
+	if len(e.Details) == 0 {
+		return head
+	}
+	return head + "\n- " + strings.Join(e.Details, "\n- ")
 }
 
 
@@ -2403,7 +2408,18 @@ func (s *EditorService) translateCloudItems(ctx context.Context, job *model.Text
 	}
 	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?",d.ID,current.Position).Updates(map[string]any{"translation_model":modelID,"checked":false,"audio_checked":false,"version":gorm.Expr("version+1")}).Error;err!=nil{return err}
 	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?",d.ID).Update("version",gorm.Expr("version+1")).Error;err!=nil{return err}
-	if issues>0{return translationIssuesError{Count:issues}}
+	if issues>0{
+		var reviewItems []model.TextbookTranslationItem
+		if err:=s.db.WithContext(ctx).Where("draft_id=? AND page=? AND status='review_warning'",d.ID,current.Position).Order("segment_id ASC, CASE item_type WHEN 'sentence' THEN 0 ELSE 1 END, word_index ASC, id ASC").Find(&reviewItems).Error;err!=nil{return err}
+		details:=make([]string,0,len(reviewItems))
+		clip:=func(value string,limit int)string{value=strings.TrimSpace(value);r:=[]rune(value);if len(r)<=limit{return value};return string(r[:limit])+"…"}
+		for _,item:=range reviewItems{
+			kind:="整句";if item.ItemType=="word"{kind="单词"}
+			reason:="需要人工核对";if item.FailureReason!=nil&&strings.TrimSpace(*item.FailureReason)!=""{reason=clip(*item.FailureReason,180)}
+			details=append(details,fmt.Sprintf("%s「%s」：%s",kind,clip(item.SourceText,70),reason))
+		}
+		return translationIssuesError{Count:len(reviewItems),Details:details}
+	}
 	return nil
 }
 
