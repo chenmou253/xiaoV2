@@ -1724,6 +1724,13 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 		if e != nil {
 			return e
 		}
+		imageInfo, e := os.Stat(image)
+		if e != nil {
+			return e
+		}
+		if imageInfo.Size() == 0 {
+			return fmt.Errorf("page %d image is empty", p.Position)
+		}
 		imageRel := fmt.Sprintf("pages/page-%03d.png", p.Position)
 		if e = copyFile(image, filepath.Join(bookRoot, filepath.FromSlash(imageRel))); e != nil {
 			return e
@@ -3138,6 +3145,17 @@ func copyFile(src, dst string) error {
 		return e
 	}
 	defer in.Close()
+	srcInfo, e := in.Stat()
+	if e != nil {
+		return e
+	}
+	if dstInfo, statErr := os.Stat(dst); statErr == nil {
+		if os.SameFile(srcInfo, dstInfo) {
+			return nil
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
 	if e = os.MkdirAll(filepath.Dir(dst), 0750); e != nil {
 		return e
 	}
