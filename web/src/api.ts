@@ -17,17 +17,19 @@ export async function api<T>(path:string, options?:RequestInit|AbortSignal):Prom
 
 export type Accent='en-US'|'en-GB';
 export type BookAudio={available_accents:Accent[];default_accent:Accent|''};
-export type Book={book_id:string;title:string;subtitle:string;description:string;publisher:string;grade:string;semester:string;cover:string;status:string;page_count:number;sort:number;revision:number;audio:BookAudio};
+export type Book={book_id:string;title:string;subtitle:string;description:string;publisher:string;grade:string;semester:string;cover:string;page_count:number;audio:BookAudio};
+export type AdminBookAudioStatus={accent:Accent;voice_id:string;ready:number;failed:number;total:number;status:string};
+export type AdminBook={book_id:string;title:string;subtitle:string;description:string;publisher:string;grade:string;semester:string;status:'draft'|'published';page_count:number;sort:number;revision:number;american_enabled:boolean;british_enabled:boolean;american_voice_id:string;british_voice_id:string;audio_config_version:number;audio_status:AdminBookAudioStatus[]};
 export type BookPage={book_id:string;page:number;printed_page:number|null;title:string;unit:string;image:string;interactive:boolean};
-export type Word={id:string;text:string;meaning?:string;phonetic?:string;box?:[number,number,number,number];polygon?:[number,number][];ocr_confidence?:number;ocr_needs_review?:boolean};
-export type Segment={id:string;label:string;text:string;translation?:string;anchor?:[number,number]|[number,number,number,number];words:Word[];audio_mode?:'sentence_and_words'|'word_only'|'none';ocr_confidence?:number;ocr_needs_review?:boolean};
+export type Word={id:string;text:string;meaning?:string;phonetic?:string;box?:[number,number,number,number];polygon?:[number,number][];ocr_confidence?:number;ocr_needs_review?:boolean;translation_status?:string;translation_failure_reason?:string};
+export type Segment={id:string;label:string;text:string;translation?:string;anchor?:[number,number]|[number,number,number,number];words:Word[];audio_mode?:'sentence_and_words'|'word_only'|'none';ocr_confidence?:number;ocr_needs_review?:boolean;translation_status?:string;translation_failure_reason?:string};
 export type PageContent=BookPage&{segments:Segment[]};
 export type Identity={id:number;email:string;kind:'student'|'admin';permissions:string[]};
 export type SiteConfig={email_enabled:boolean;email_mode:'local'|'smtp'|'disabled'};
 export type SiteSetting={id:number;dict_code:string;item_label:string;item_value:string;sort:number;status:0|1;remark:string|null;created_at:string;updated_at:string};
-export type AIModel={id:string;name:string;type:'ocr'|'tts';provider:string;enabled:boolean;cloud:boolean;available:boolean;unavailable_reason?:string;capabilities:string[];default_voice?:string;retry_policy:string};
+export type AIModel={id:string;name:string;type:'ocr'|'translation'|'tts';provider:string;enabled:boolean;cloud:boolean;available:boolean;unavailable_reason?:string;capabilities:string[];default_voice?:string;retry_policy:string};
 export type AIVoice={id:string;name:string;display_name:string};
-export type AIModelSettings={ocr_model:string;tts_model:string;tts_voice:string};
+export type AIModelSettings={ocr_model:string;translation_model:string;tts_model:string;tts_voice:string};
 
 export const booksAPI={
   list:(signal?:AbortSignal)=>api<Book[]>('/books',signal),

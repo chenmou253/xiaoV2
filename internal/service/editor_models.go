@@ -18,6 +18,13 @@ func validDraftModelSettings(value ai.Settings) (ai.Settings, error) {
 	if !ocr.Available {
 		return value, bad("OCR 模型当前不可用：" + ocr.UnavailableReason)
 	}
+	translationModel, ok := ai.Find(value.TranslationModel)
+	if !ok || translationModel.Type != "translation" || !translationModel.Enabled {
+		return value, bad("翻译模型无效")
+	}
+	if !translationModel.Available {
+		return value, bad("翻译模型当前不可用：" + translationModel.UnavailableReason)
+	}
 	ttsModel, ok := ai.Find(value.TTSModel)
 	if !ok || ttsModel.Type != "tts" || !ttsModel.Enabled {
 		return value, bad("TTS 模型无效")
@@ -50,6 +57,11 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 		return err
 	}
 	currentSettings := draftModelSettings(current)
+	if currentSettings.TranslationModel != settings.TranslationModel {
+		if err := s.ReleaseTranslationDaemonForModelSwitch(currentSettings.TranslationModel, settings.TranslationModel); err != nil {
+			return err
+		}
+	}
 	if currentSettings.TTSModel != settings.TTSModel {
 		// Release an idle resident model immediately. The transaction below
 		// still performs the authoritative queued/running job check.
@@ -73,6 +85,7 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 			return conflict("有任务正在执行，暂时不能切换模型")
 		}
 		old := draftModelSettings(draft)
+		translationChanged := old.TranslationModel != settings.TranslationModel
 		ttsChanged := old.TTSModel != settings.TTSModel || old.TTSVoice != settings.TTSVoice
 		var pages []model.TextbookDraftPage
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("draft_id=?", id).Order("position").Find(&pages).Error; err != nil {
@@ -88,6 +101,9 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 			if page.OCRModel == "" {
 				page.OCRModel, updates["ocr_model"] = snapshot.OCRModel, snapshot.OCRModel
 			}
+			if page.TranslationModel == "" {
+				page.TranslationModel, updates["translation_model"] = snapshot.TranslationModel, snapshot.TranslationModel
+			}
 			if page.TTSModel == "" {
 				page.TTSModel, updates["tts_model"] = snapshot.TTSModel, snapshot.TTSModel
 			}
@@ -102,9 +118,9 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 		}
 
 		next := draft
-		next.OCRModel, next.TTSModel, next.TTSVoice = settings.OCRModel, settings.TTSModel, settings.TTSVoice
+		next.OCRModel, next.TranslationModel, next.TTSModel, next.TTSVoice = settings.OCRModel, settings.TranslationModel, settings.TTSModel, settings.TTSVoice
 		if err := tx.Model(&draft).Updates(map[string]any{
-			"ocr_model": settings.OCRModel, "tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice,
+			"ocr_model": settings.OCRModel, "translation_model": settings.TranslationModel, "tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice,
 			"version": gorm.Expr("version+1"), "updated_by": actor,
 			"status": func() string {
 				if draft.Status == "failed" {
@@ -116,6 +132,10 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 			return err
 		}
 
+		// Unlocked pages follow the draft translation default dynamically.
+		// Do not overwrite their page snapshot here: translation_model records
+		// the model that actually produced the current translation and is
+		// updated only when a translation job succeeds.
 		if ttsChanged {
 			for index := range pages {
 				page := &pages[index]
@@ -127,7 +147,7 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 				}
 				page.TTSModel, page.TTSVoice, page.AudioChecked = settings.TTSModel, settings.TTSVoice, false
 				if err := tx.Model(page).Updates(map[string]any{
-					"tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice, "audio_checked": false,
+					"tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice, "audio_checked": false, "inherited_audio": false,
 					"version": gorm.Expr("version+1"),
 				}).Error; err != nil {
 					return err
@@ -139,7 +159,7 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 			}
 		}
 		return editorAudit(tx, actor, "draft.models.switch", id, map[string]any{
-			"before": old, "after": settings, "tts_pending_audio_reset": ttsChanged,
+			"before": old, "after": settings, "translation_unlocked_updated": translationChanged, "tts_pending_audio_reset": ttsChanged,
 		})
 	})
 }

@@ -225,6 +225,50 @@ func (h *EditorHandler) AudioIssues(c *gin.Context) {
 	}
 	success(c, issues)
 }
+func (h *EditorHandler) TranslationIssues(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	issues, e := h.service.TranslationIssues(c.Request.Context(), c.Param("draftId"), p)
+	if e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, issues)
+}
+
+func (h *EditorHandler) ResolveTranslationIssue(c *gin.Context) {
+	p, ok := pageParam(c)
+	if !ok {
+		return
+	}
+	var in struct {
+		Revision    uint64 `json:"revision"`
+		Translation string `json:"translation"`
+		Meaning     string `json:"meaning"`
+		Phonetic    string `json:"phonetic"`
+	}
+	if !bindJSON(c, &in) {
+		return
+	}
+	if e := h.service.ResolveTranslationIssue(
+		c.Request.Context(),
+		c.Param("draftId"),
+		p,
+		c.Param("itemId"),
+		in.Revision,
+		in.Translation,
+		in.Meaning,
+		in.Phonetic,
+		identity(c).ID,
+	); e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
 func (h *EditorHandler) FailedAudio(c *gin.Context) {
 	p, ok := pageParam(c)
 	if !ok {
@@ -377,15 +421,16 @@ func (h *EditorHandler) SaveMeta(c *gin.Context) {
 
 func (h *EditorHandler) SwitchModels(c *gin.Context) {
 	var in struct {
-		OCRModel string `json:"ocr_model"`
-		TTSModel string `json:"tts_model"`
+		OCRModel         string `json:"ocr_model"`
+		TranslationModel string `json:"translation_model"`
+		TTSModel         string `json:"tts_model"`
 		TTSVoice string `json:"tts_voice"`
 		Version  uint64 `json:"version"`
 	}
 	if !bindJSON(c, &in) {
 		return
 	}
-	if e := h.service.SwitchModels(c.Request.Context(), c.Param("draftId"), in.Version, identity(c).ID, ai.Settings{OCRModel: in.OCRModel, TTSModel: in.TTSModel, TTSVoice: in.TTSVoice}); e != nil {
+	if e := h.service.SwitchModels(c.Request.Context(), c.Param("draftId"), in.Version, identity(c).ID, ai.Settings{OCRModel: in.OCRModel, TranslationModel: in.TranslationModel, TTSModel: in.TTSModel, TTSVoice: in.TTSVoice}); e != nil {
 		writePlatformError(c, e)
 		return
 	}

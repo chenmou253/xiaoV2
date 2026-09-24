@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type AIModel, type AIModelSettings, type AIVoice, type Book, type Identity, type SiteSetting } from "./api";
+import { api, type AdminBook, type AIModel, type AIModelSettings, type AIVoice, type Identity, type SiteSetting } from "./api";
 import AudioReviewPage from "./AudioReviewPage";
 import DraftPageEditor from "./DraftPageEditor";
 import "./admin-job-progress.css";
 
 type Row = Record<string, any>;
+type ToastState = { message: string; kind: "success" | "error" } | null;
 type Tab =
   | "drafts"
   | "audio-review"
@@ -80,7 +81,7 @@ export default function Admin() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [toast, setToast] = useState<ToastState>(null);
   const loadID = useRef(0);
   const can = (permission: string) => !!me?.permissions.includes(permission);
   useEffect(() => {
@@ -98,10 +99,19 @@ export default function Admin() {
       .finally(() => setReady(true));
   }, []);
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 8000);
+    if (!toast) return;
+    const timer = window.setTimeout(
+      () => setToast(null),
+      toast.kind === "error" ? 4000 : 2500,
+    );
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [toast]);
+
+  const showNotice = (message: string) =>
+    setToast({ message, kind: "success" as const });
+
+  const showActionError = (message: string) =>
+    setToast({ message, kind: "error" as const });
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
@@ -121,7 +131,7 @@ export default function Admin() {
       if (target === "site-settings")
         next = (await api<SiteSetting[]>("/admin/site-settings")) || [];
       else if (target === "books")
-        next = (await api<Book[]>("/admin/books")) || [];
+        next = (await api<AdminBook[]>("/admin/books")) || [];
       else if (target === "students")
         next = (await api<Row[]>("/admin/students")) || [];
       else if (target === "rbac") {
@@ -150,25 +160,23 @@ export default function Admin() {
   }, [tab, me]);
   async function run(work: () => Promise<void>) {
     setBusy(true);
-    setError("");
-    setNotice("");
+    setToast(null);
     try {
       await work();
     } catch (e) {
-      setError((e as Error).message);
+      showActionError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
   async function runResult(work: () => Promise<void>): Promise<boolean> {
     setBusy(true);
-    setError("");
-    setNotice("");
+    setToast(null);
     try {
       await work();
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      showActionError((e as Error).message);
       return false;
     } finally {
       setBusy(false);
@@ -231,9 +239,17 @@ export default function Admin() {
         </header>
         {busy && <p>正在处理…</p>}
         {error && <p className="admin-error">{error}</p>}
-        {notice && <p className="admin-success admin-toast" role="status" aria-live="polite">{notice}</p>}
-        {tab === "drafts" && <Drafts me={me} run={run} runResult={runResult} notice={setNotice} />}
-        {tab === "audio-review" && <AudioReviewPage me={me} run={run} notice={setNotice} refreshToken={refreshToken} />}
+        {toast && (
+          <p
+            className={`admin-toast admin-toast-${toast.kind}`}
+            role={toast.kind === "error" ? "alert" : "status"}
+            aria-live={toast.kind === "error" ? "assertive" : "polite"}
+          >
+            {toast.message}
+          </p>
+        )}
+        {tab === "drafts" && <Drafts me={me} run={run} runResult={runResult} notice={showNotice} />}
+        {tab === "audio-review" && <AudioReviewPage me={me} run={run} notice={showNotice} refreshToken={refreshToken} />}
         {tab === "books" && (
           <Books
             rows={data || []}
@@ -307,6 +323,7 @@ function SiteSettings({
       });
   }, [settings?.tts_model]);
   const ocrModels = models.filter((model) => model.type === "ocr" && model.enabled);
+  const translationModels = models.filter((model) => model.type === "translation" && model.enabled);
   const ttsModels = models.filter((model) => model.type === "tts" && model.enabled);
   return (
     <section className="admin-panel">
@@ -329,6 +346,16 @@ function SiteSettings({
             OCR 模型
             <select value={settings.ocr_model} disabled={!writable} onChange={(event) => setSettings({ ...settings, ocr_model: event.target.value })}>
               {ocrModels.map((model) => (
+                <option key={model.id} value={model.id} disabled={!model.available}>
+                  {model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            翻译模型
+            <select value={settings.translation_model} disabled={!writable} onChange={(event) => setSettings({ ...settings, translation_model: event.target.value })}>
+              {translationModels.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}
                 </option>
@@ -416,7 +443,7 @@ function Books({
   canEdit,
   run,
 }: {
-  rows: (Book & { revision: number })[];
+  rows: AdminBook[];
   canPublish: boolean;
   canEdit: boolean;
   run: any;
@@ -950,6 +977,7 @@ function Drafts({
     if (!detail?.draft?.id) return;
     setDraftModelSettings({
       ocr_model: detail.draft.ocr_model || "local-paddleocr",
+      translation_model: detail.draft.translation_model || "qwen3.7-flash",
       tts_model: detail.draft.tts_model || "local-qwen3-tts",
       tts_voice: detail.draft.tts_voice || "aiden",
     });
@@ -1114,11 +1142,14 @@ function Drafts({
     if (!detail || !draftModelSettings || processing || !editableDraft) return;
     const draft = detail.draft;
     const ttsChanged = draft.tts_model !== draftModelSettings.tts_model || draft.tts_voice !== draftModelSettings.tts_voice;
+    const translationChanged = draft.translation_model !== draftModelSettings.translation_model;
     const ocrChanged = draft.ocr_model !== draftModelSettings.ocr_model;
-    if (!ttsChanged && !ocrChanged) return;
+    if (!ttsChanged && !translationChanged && !ocrChanged) return;
     const impact = ttsChanged
       ? "未完成页面的旧音频与 QA 结果会清除，并改为使用新 TTS 重新生成；已完整确认的页面不会变。"
-      : "仅影响后续 OCR 或你主动重新 OCR 的页面；已确认页面不会变。";
+      : translationChanged
+        ? "只更新文字尚未确认页面和后续页面的翻译模型；已确认文字的页面保留原翻译结果与模型。"
+        : "仅影响后续 OCR 或你主动重新 OCR 的页面；已确认页面不会变。";
     if (!confirm(`确定切换此草稿的默认模型吗？\n${impact}`)) return;
     await run(async () => {
       await api(`/admin/drafts/${id}/models`, {
@@ -1175,8 +1206,9 @@ function Drafts({
   const currentIsLast = pageNo === lastPage;
   const allSourcePagesAvailable = sourcePageCount > 0 && lastPage >= sourcePageCount;
   const editableDraft = ["draft", "failed"].includes(detail?.draft?.status || "");
-  const currentHasIssues = !!(page?.issues || []).length;
-  const currentHasAudioIssues = audioIssues.length > 0;
+  const inheritedCurrentPage = detail?.draft?.source_kind === "published" && page?.inherited_audio && page?.audio_checked;
+  const currentHasIssues = !inheritedCurrentPage && !!(page?.issues || []).length;
+  const currentHasAudioIssues = !inheritedCurrentPage && audioIssues.length > 0;
   const currentHasOCRContent =
     Array.isArray(page?.content?.segments) && page.content.segments.length > 0;
   const currentHasAudioContent =
@@ -1205,6 +1237,8 @@ function Drafts({
   const currentOCRReviewed = !!page?.checked && !currentHasIssues;
   const currentAudioReviewed = !!page?.audio_checked && !currentHasIssues && !currentHasAudioIssues;
   const currentReviewed = currentOCRReviewed && currentAudioReviewed;
+  const textConfirmedCount = pages.filter((item: Row) => !!item.checked).length;
+  const audioPendingCount = pages.filter((item: Row) => !!item.checked && !item.audio_checked).length;
   const editingSelectedDraft = !!id && detail?.draft?.id === id;
   const selectedDraftLoading = !!id && !editingSelectedDraft;
   const americanEnabled = editingSelectedDraft
@@ -1221,9 +1255,11 @@ function Drafts({
       : detail?.draft?.british_enabled
         ? "英式音频"
         : "音频已关闭";
-  const configuredAudioReady = audioRequired && (detail?.audio || [])
-    .filter((item:Row)=>item.status!=="disabled")
-    .every((item:Row)=>item.status==="ready");
+  const configuredAudioReady = audioRequired && (detail?.draft?.source_kind === "published"
+    ? pages.length > 0 && pages.every((item: Row) => !!item.audio_checked)
+    : (detail?.audio || [])
+      .filter((item: Row) => item.status !== "disabled")
+      .every((item: Row) => item.status === "ready"));
   // `page` is the pre-split legacy task; it already contains audio and must
   // remain reviewable without asking the worker to produce it again.
   const audioGeneratedForCurrent = typeof page?.audio_ready === "boolean"
@@ -1237,6 +1273,9 @@ function Drafts({
     const voice = detail.draft.tts_model === "qwen3-tts-flash"
       ? detail.draft.tts_voice
       : accent === "en-US" ? "aiden" : "ryan";
+    if (detail.draft.source_kind === "published" && configuredAudioReady) {
+      return `${voice} · 已确认`;
+    }
     return status?.status === "ready"
       ? `${voice} · 音频完整`
       : `${voice} · ${status?.ready || 0}/${status?.total || 0}`;
@@ -1303,14 +1342,17 @@ function Drafts({
 
   async function queueAudio() {
     if (!audioRequired) {
-      notice("当前草稿已关闭所有发音，本页只确认 OCR，不会生成音频");
+      notice("当前草稿已关闭所有发音，本页无需生成音频");
+      return;
+    }
+    if (!currentOCRReviewed) {
+      notice("请先确认本页文字，再生成音频");
       return;
     }
     await run(async () => {
-      const latest = await savePageReview("", "ocr");
-      await action("audio", "", latest.draft.version, pageNo);
+      await action("audio", "", detail.draft.version, pageNo);
       await loadDetail(id, pageNo);
-      notice(`第 ${pageNo} 页 OCR 已确认，已启用的发音音频已进入生成队列`);
+      notice(`第 ${pageNo} 页已确认文字的音频已进入生成队列`);
     });
   }
   async function queuePageAudioReplacement() {
@@ -1385,14 +1427,45 @@ function Drafts({
     });
     setTranslationSubmitting(false);
   }
+  async function confirmTextAndContinue() {
+    const next = lastPage + 1;
+    await run(async () => {
+      // Save visible edits first. A real content edit invalidates old audio,
+      // but it never forces a new OCR run. The explicit confirm-text action
+      // then validates the persisted page and locks the text stage.
+      const saved = await savePageReview("", "none");
+      await action("confirm-text", "", saved.draft.version, pageNo);
+      const confirmed = await loadDetail(id, pageNo);
+      if (currentIsLast && sourcePageCount > lastPage) {
+        await action("next-page", "", confirmed.draft.version, pageNo);
+        setWaitingPage(next);
+        await loadDetail(id, next);
+        notice(`第 ${pageNo} 页文字已确认；第 ${next} 页 OCR 已进入队列。音频可稍后批量生成。`);
+        return;
+      }
+      notice(`第 ${pageNo} 页文字已确认；音频可稍后单独或批量生成。`);
+    });
+  }
+
   async function queueNextPage() {
     const next = lastPage + 1;
     await run(async () => {
-      const latest = await savePageReview("", "audio");
-      await action("next-page", "", latest.draft.version);
+      await action("next-page", "", detail.draft.version, pageNo);
       setWaitingPage(next);
       await loadDetail(id, next);
-      notice(`第 ${next} 页已进入单页生成队列`);
+      notice(`第 ${next} 页 OCR 已进入队列；无需等待上一页音频。`);
+    });
+  }
+
+  async function queuePendingAudio() {
+    if (!audioRequired) {
+      notice("当前草稿已关闭所有发音，无需生成音频");
+      return;
+    }
+    await run(async () => {
+      await action("audio-missing", "", detail.draft.version);
+      await loadDetail(id, pageNo);
+      notice("已确认文字页面的缺失音频已进入批量生成队列");
     });
   }
   async function queueReOCR(targetPage: number) {
@@ -1413,34 +1486,21 @@ function Drafts({
     });
   }
   async function approveWithoutAudio() {
-    const next = lastPage + 1;
-    const reason = currentHasOCRContent
-      ? "本页片段均设置为不生成音频"
-      : "本页没有可朗读 OCR 内容";
-    await run(async () => {
-      // A previous attempt may already have saved the page but failed
-      // before queuing the next OCR job.  In that case, reuse the current
-      // draft version and only resume the missing next-page action.
-      const latest = currentReviewed
-        ? detail
-        : await savePageReview("", "audio");
-      if (audioFreePageNeedsNext) {
-        await action("next-page", "", latest.draft.version);
-        setWaitingPage(next);
-        await loadDetail(id, next);
-        notice(`第 ${pageNo} 页已跳过音频并生成第 ${next} 页 OCR`);
-        return;
-      }
-      notice(`${reason}，审核已确认并跳过音频`);
-    });
+    if (!currentOCRReviewed) {
+      await confirmTextAndContinue();
+      return;
+    }
+    if (!currentAudioReviewed) {
+      await run(() => savePageReview("本页文字已确认且无需音频", "audio"));
+    }
   }
   return (
     <>
       <section className="admin-panel">
         <h2>PDF 教材逐页工作流</h2>
         <p>
-          上传后仅生成第 1 页 OCR（含单词坐标与置信度）；OCR 确认后按已启用的口音生成音频，
-          完成试听确认后才能生成下一页。
+          上传后逐页完成 OCR、翻译与文字审核；本页文字确认后即可继续下一页，不再等待音频。
+          音频作为独立阶段，可按页生成或批量补齐，发布前再完成试听确认。
         </p>
         {can("content.write") && (
           <form
@@ -1580,15 +1640,16 @@ function Drafts({
             )}
           </p>
           <p className="admin-note">
-            OCR：{detail.draft.ocr_model || "local-paddleocr"} · TTS：{detail.draft.tts_model || "local-qwen3-tts"}
+            OCR：{detail.draft.ocr_model || "local-paddleocr"} · 翻译：{detail.draft.translation_model || "qwen3.7-flash"} · TTS：{detail.draft.tts_model || "local-qwen3-tts"}
             {detail.draft.tts_voice ? ` · 音色 ${detail.draft.tts_voice}` : ""}
           </p>
           {draftModelSettings && <form className="draft-model-switcher" onSubmit={(event) => { event.preventDefault(); void switchDraftModels(); }}>
             <label>后续 OCR 默认模型<select value={draftModelSettings.ocr_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, ocr_model: event.target.value })}>{draftModels.filter((model) => model.type === "ocr" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
+            <label>后续翻译默认模型<select value={draftModelSettings.translation_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, translation_model: event.target.value })}>{draftModels.filter((model) => model.type === "translation" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
             <label>后续 TTS 默认模型<select value={draftModelSettings.tts_model} disabled={!can("content.write") || !editableDraft || processing} onChange={(event) => { const model = draftModels.find((item) => item.id === event.target.value); setDraftModelSettings({ ...draftModelSettings, tts_model: event.target.value, tts_voice: model?.default_voice || "" }); }}>{draftModels.filter((model) => model.type === "tts" && model.enabled).map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : `（${model.unavailable_reason || "不可用"}）`}</option>)}</select></label>
             <label>线上 TTS 音色<select value={draftModelSettings.tts_voice} disabled={!can("content.write") || !editableDraft || processing || draftVoices.length === 0} onChange={(event) => setDraftModelSettings({ ...draftModelSettings, tts_voice: event.target.value })}>{draftVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.display_name}</option>)}</select></label>
             <button className="admin-primary" disabled={!can("content.write") || !editableDraft || processing}>应用到未锁定页面</button>
-            <small>已完成 OCR 与音频确认的页面会锁定原模型、文本和音频；切换 TTS 只清理未锁定页面的临时音频。</small>
+            <small>文字已确认的页面锁定原翻译模型；全部确认页面锁定原 OCR/TTS。切换翻译模型只影响文字未确认页和后续页，切换 TTS 只清理未完成页面的临时音频。</small>
           </form>}
           <div className="page-workflow">
             <strong>
@@ -1597,8 +1658,8 @@ function Drafts({
                 : sourcePageCount && lastPage >= sourcePageCount
                   ? "全部页面已生成"
                 : audioRequired
-                  ? "当前页面需按 OCR、音频顺序审核"
-                  : "当前页面只需审核 OCR（发音已关闭）"}
+                  ? "文字审核与音频阶段已解耦"
+                  : "当前页面只需完成文字审核（发音已关闭）"}
             </strong>
             <span>
               {lastPage
@@ -1710,7 +1771,14 @@ function Drafts({
                   ) : null}
                   {job.error && (
                     <div className="job-error">
-                      <strong>{readableJobError(job.error)}</strong>
+                      <strong>{readableJobError(job.error).split("\n")[0]}</strong>
+                      {job.kind === "translate" && job.error.includes("翻译结果需要人工审核") && (
+                        <ul className="translation-review-job-details">
+                          {job.error.split("\n").slice(1).filter((line: string) => line.trim()).map((line: string, index: number) => (
+                            <li key={index}>{line.replace(/^\s*-\s*/, "")}</li>
+                          ))}
+                        </ul>
+                      )}
                       {isAudioJob && audioIssues.length > 0 && (
                         <p><button onClick={() => openAudioReview(id, pageNo)}>前往人工审核页面（{audioIssues.length} 项）</button></p>
                       )}
@@ -1735,7 +1803,7 @@ function Drafts({
           <div className="action-row">
             {detail.draft.status === "draft" && can("content.write") && (
               <>
-                {lastPage > 0 && sourcePageCount > lastPage && currentAudioReviewed && (
+                {lastPage > 0 && sourcePageCount > lastPage && currentOCRReviewed && (
                   <button
                     className="admin-primary"
                     disabled={processing || !currentIsLast || currentHasIssues}
@@ -1748,7 +1816,16 @@ function Drafts({
                     }
                     onClick={() => void queueNextPage()}
                   >
-                    确认音频并生成第 {lastPage + 1} 页 OCR
+                    继续生成第 {lastPage + 1} 页 OCR
+                  </button>
+                )}
+                {audioRequired && textConfirmedCount > 0 && !configuredAudioReady && (
+                  <button
+                    disabled={processing}
+                    onClick={() => void queuePendingAudio()}
+                    title="只处理文字已经确认且当前缺失音频的页面；未确认文字的页面不会进入 TTS"
+                  >
+                    批量补齐已确认页面音频{audioPendingCount > 0 ? `（${audioPendingCount} 页待确认）` : ""}
                   </button>
                 )}
                 <button
@@ -1809,19 +1886,69 @@ function Drafts({
           </div>
           {detail.pages.length > 0 && (
             <div className="draft-grid">
-              <aside>
-                {detail.pages.map((item: Row) => (
-                  <div key={item.position}>
-                    <button
-                      className={item.position === pageNo ? "active" : ""}
-                      onClick={() => setPageNo(item.position)}
-                    >
-                      第 {item.position} 页{" "}
-                      {item.checked && item.audio_checked ? "✓ 已确认" : "待审核"}
-                    </button>
-                    <small className="draft-page-model">{item.checked && item.audio_checked ? "已锁定" : "未锁定"} · {item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / {item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
-                  </div>
-                ))}
+              <aside className="draft-page-sidebar">
+                <div className="draft-page-toolbar">
+                  <strong>页面</strong>
+                  <select
+                    aria-label="筛选页面状态"
+                    defaultValue="all"
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      document.querySelectorAll<HTMLElement>(".draft-page-row").forEach((row) => {
+                        row.hidden = value !== "all" && row.dataset.status !== value;
+                      });
+                    }}
+                  >
+                    <option value="all">全部 {detail.pages.length}</option>
+                    <option value="pending">待处理</option>
+                    <option value="done">已完成</option>
+                  </select>
+                  <input
+                    className="draft-page-jump"
+                    type="number"
+                    min={1}
+                    max={Math.max(...detail.pages.map((item: Row) => item.position))}
+                    placeholder="页码"
+                    aria-label="跳转页码"
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      const next = Number(e.currentTarget.value);
+                      if (detail.pages.some((item: Row) => item.position === next)) setPageNo(next);
+                    }}
+                  />
+                </div>
+                <div className="draft-page-list">
+                  {detail.pages.map((item: Row) => {
+                    const done = Boolean(item.checked && item.audio_checked);
+                    return (
+                      <button
+                        key={item.position}
+                        data-status={done ? "done" : "pending"}
+                        className={`draft-page-row ${item.position === pageNo ? "active" : ""}`}
+                        onClick={() => setPageNo(item.position)}
+                        title={`${item.checked ? "文字已锁定" : "文字未锁定"} · ${item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / ${item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")} / ${item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}`}
+                      >
+                        <span>第 {item.position} 页</span>
+                        <small>
+                          {!item.checked
+                            ? "文字待审核"
+                            : item.audio_checked
+                              ? "✓ 完成"
+                              : "音频待处理"}
+                        </small>
+                      </button>
+                    );
+                  })}
+                </div>
+                {detail.pages.find((item: Row) => item.position === pageNo) && (() => {
+                  const item = detail.pages.find((entry: Row) => entry.position === pageNo)!;
+                  return <div className="draft-page-detail">
+                    <strong>第 {item.position} 页详情</strong>
+                    <small>OCR：{item.ocr_model || detail.draft.ocr_model || "local-paddleocr"}</small>
+                    <small>翻译：{item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")}</small>
+                    <small>TTS：{item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
+                  </div>;
+                })()}
               </aside>
               {page && (
                 <div>
@@ -1889,23 +2016,17 @@ function Drafts({
                   )}
                   <p className="admin-note">
                     审核状态：
-                    {!currentHasAudioContent
-                      ? currentHasOCRContent
-                        ? "本页片段均设置为不生成音频，可直接审核通过"
-                        : "本页没有可朗读 OCR 内容，可直接审核通过并跳过音频"
-                      : currentReviewed
-                      ? audioRequired
-                        ? `本页 OCR 与${enabledAccentLabel}均已确认`
-                        : "本页 OCR 已确认（已跳过音频）"
-                      : currentHasAudioIssues
-                        ? `本页有 ${audioIssues.length} 个音频需要单独处理`
-                      : currentOCRReviewed
-                        ? audioGeneratedForCurrent
-                          ? audioRequired
-                            ? `OCR 已确认，待试听并确认${enabledAccentLabel}`
-                            : "OCR 已确认，待点击确认跳过音频"
-                          : `OCR 已确认，待生成${enabledAccentLabel}`
-                        : "待确认 OCR 正文、坐标与置信度"}
+                    {!currentOCRReviewed
+                      ? "文字待确认：请核对 OCR 正文、坐标、翻译与音标"
+                      : !currentHasAudioContent || !audioRequired
+                        ? "文字已确认，本页无需音频"
+                        : currentHasAudioIssues
+                          ? `文字已确认 · ${audioIssues.length} 个音频需要处理`
+                          : !audioGeneratedForCurrent
+                            ? `文字已确认 · ${enabledAccentLabel}待生成`
+                            : !currentAudioReviewed
+                              ? `文字已确认 · ${enabledAccentLabel}待试听确认`
+                              : `文字与${enabledAccentLabel}均已确认`}
                   </p>
                   <div className="action-row">
                     <button
@@ -1971,76 +2092,49 @@ function Drafts({
                           ? "请先补全并保存页面中的待完成内容"
                           : currentHasAudioIssues
                             ? `进入异常处理，逐项处理剩余的 ${audioIssues.length} 个失败音频`
-                          : !currentHasAudioContent
-                            ? audioFreePageNeedsNext
-                              ? `本页无需生成音频，将审核通过并生成第 ${lastPage + 1} 页 OCR`
-                              : currentHasOCRContent
-                                ? "本页片段均设置为不生成音频，将直接审核通过"
-                                : "本页没有可朗读 OCR 内容，将跳过音频生成"
                             : !currentOCRReviewed
-                            ? audioGeneratedForCurrent
-                              ? "先确认 OCR 正文、坐标与置信度"
-                              : `确认 OCR 后才会生成本页${enabledAccentLabel}`
-                            : !audioGeneratedForCurrent
-                              ? `OCR 已确认，现在生成本页${enabledAccentLabel}`
-                              : !audioRequired
-                                ? "当前草稿已关闭发音，本页将跳过音频"
-                                : `试听${enabledAccentLabel}后再确认`
+                              ? currentIsLast && sourcePageCount > lastPage
+                                ? `确认本页文字并继续第 ${lastPage + 1} 页 OCR；音频稍后处理`
+                                : "确认本页文字；音频作为独立阶段稍后处理"
+                              : !currentHasAudioContent || !audioRequired
+                                ? "本页文字已确认且无需音频"
+                                : !audioGeneratedForCurrent
+                                  ? `生成本页${enabledAccentLabel}`
+                                  : !currentAudioReviewed
+                                    ? `试听后确认本页${enabledAccentLabel}`
+                                    : "本页文字和音频均已完成"
                       }
                       onClick={() => {
                         if (currentHasAudioIssues) {
                           openAudioReview(id, pageNo);
-                        } else if (!currentHasAudioContent) {
-                          void approveWithoutAudio();
                         } else if (!currentOCRReviewed) {
-                          if (audioGeneratedForCurrent) {
-                            void run(() => savePageReview("本页 OCR 已确认", "ocr"));
-                          } else {
-                            void queueAudio();
-                          }
+                          void confirmTextAndContinue();
+                        } else if (!currentHasAudioContent || !audioRequired) {
+                          void approveWithoutAudio();
                         } else if (!audioGeneratedForCurrent) {
                           void queueAudio();
                         } else if (!currentAudioReviewed) {
-                          if (currentIsLast && sourcePageCount > lastPage) {
-                            void queueNextPage();
-                          } else {
-                            void run(() =>
-                              savePageReview(
-                                audioRequired ? `本页${enabledAccentLabel}已确认` : "本页 OCR 已确认（已跳过音频）",
-                                "audio",
-                              ),
-                            );
-                          }
+                          void run(() =>
+                            savePageReview(`本页${enabledAccentLabel}已确认`, "audio"),
+                          );
                         }
                       }}
                     >
                       {currentHasAudioIssues
                         ? `处理 ${audioIssues.length} 个失败音频`
-                        : !currentHasAudioContent
-                        ? audioFreePageNeedsNext
-                          ? currentReviewed
-                            ? `继续生成第 ${lastPage + 1} 页 OCR`
-                            : `审核通过并生成第 ${lastPage + 1} 页 OCR`
-                          : currentHasOCRContent
-                            ? "审核通过（本页不生成音频）"
-                            : "审核通过（跳过音频）"
                         : !currentOCRReviewed
-                        ? audioGeneratedForCurrent
-                          ? "确认本页 OCR"
-                          : audioRequired
-                            ? `确认 OCR 并生成${enabledAccentLabel}`
-                            : "确认本页 OCR（跳过音频）"
-                        : !audioGeneratedForCurrent
-                          ? `生成本页${enabledAccentLabel}`
-                          : !currentAudioReviewed
-                            ? currentIsLast && sourcePageCount > lastPage
-                              ? audioRequired
-                                ? `确认${enabledAccentLabel}并生成第 ${lastPage + 1} 页 OCR`
-                                : `确认本页并生成第 ${lastPage + 1} 页 OCR`
-                              : audioRequired
+                          ? currentIsLast && sourcePageCount > lastPage
+                            ? `确认文字并生成第 ${lastPage + 1} 页 OCR`
+                            : "确认本页文字"
+                          : !currentHasAudioContent || !audioRequired
+                            ? currentAudioReviewed
+                              ? "本页文字已确认（无需音频）"
+                              : "确认本页无需音频"
+                            : !audioGeneratedForCurrent
+                              ? `生成本页${enabledAccentLabel}`
+                              : !currentAudioReviewed
                                 ? `确认本页${enabledAccentLabel}`
-                                : "确认本页（跳过音频）"
-                            : "本页审核已完成"}
+                                : "本页已全部完成"}
                     </button>
                   </div>
                 </div>

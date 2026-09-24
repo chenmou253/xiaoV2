@@ -41,7 +41,7 @@ func (s *EditorService) restartPageAudio(ctx context.Context, id string, version
 			Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 			return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 		}
-		if issues := pageAudioRegenerationIssues(current.Content); len(issues) > 0 {
+		if issues := s.pageAudioRegenerationIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
 			return bad(fmt.Sprintf("第 %d 页暂不能重新生成音频：%s", page, strings.Join(issues, "；")))
 		}
 
@@ -109,9 +109,10 @@ func (s *EditorService) restartPageAudio(ctx context.Context, id string, version
 			return e
 		}
 		if e := tx.Model(&current).Updates(map[string]any{
-			"checked":       true,
-			"audio_checked": false,
-			"version":       gorm.Expr("version+1"),
+			"checked":         true,
+			"audio_checked":   false,
+			"inherited_audio": false,
+			"version":         gorm.Expr("version+1"),
 		}).Error; e != nil {
 			return e
 		}

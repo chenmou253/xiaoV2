@@ -115,6 +115,8 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		admin.POST("/drafts/:draftId/pages/:page/audio/:itemId/regenerate", platform.Require("content.write"), editor.RegenerateAudioItem)
 		admin.POST("/drafts/:draftId/pages/:page/audio/:itemId/upload", platform.Require("content.write"), editor.UploadAudioItem)
 		admin.GET("/drafts/:draftId/pages/:page/audio-issues", platform.Require("content.read"), editor.AudioIssues)
+		admin.GET("/drafts/:draftId/pages/:page/translation-issues", platform.Require("content.read"), editor.TranslationIssues)
+		admin.PUT("/drafts/:draftId/pages/:page/translation-issues/:itemId", platform.Require("content.write"), editor.ResolveTranslationIssue)
 		admin.GET("/drafts/:draftId/pages/:page/audio-issues/:itemId/failed", platform.Require("content.read"), editor.FailedAudio)
 		admin.POST("/drafts/:draftId/pages/:page/audio-issues/:itemId/retry", platform.Require("content.write"), editor.RetryAudioIssue)
 		admin.POST("/drafts/:draftId/pages/:page/audio-issues/:itemId/approve", platform.Require("content.write"), editor.ApproveAudioIssue)

@@ -95,6 +95,33 @@ class PerBookAudioPlanningTests(unittest.TestCase):
 
         self.assertEqual(self.generator._items(content, 1, {"en-US": "aiden"}), [])
 
+
+    def test_page_reuse_key_deduplicates_same_content_same_voice(self) -> None:
+        first = AudioItem("word", "Cool!", "Cool!", 1, "s1", "w1",
+                          0, 0, "en-US", "aiden")
+        second = AudioItem("word", "cool", "Different context.", 1, "s2", "w2",
+                           1, 0, "en-US", "aiden")
+        self.assertEqual(
+            self.generator._page_reuse_key(first),
+            self.generator._page_reuse_key(second),
+        )
+
+    def test_page_reuse_key_keeps_accent_and_kind_separate(self) -> None:
+        word = AudioItem("word", "hello", "hello", 1, "s1", "w1",
+                         0, 0, "en-US", "aiden")
+        british = AudioItem("word", "hello", "hello", 1, "s1", "w2",
+                            0, 1, "en-GB", "ryan")
+        sentence = AudioItem("sentence", "hello", "hello", 1, "s2", "s2",
+                             1, None, "en-US", "aiden")
+        self.assertNotEqual(
+            self.generator._page_reuse_key(word),
+            self.generator._page_reuse_key(british),
+        )
+        self.assertNotEqual(
+            self.generator._page_reuse_key(word),
+            self.generator._page_reuse_key(sentence),
+        )
+
     def test_word_cache_key_ignores_model_voice_accent_and_prompt(self) -> None:
         generator = object.__new__(AudioGenerator)
         generator.model_id = "local-qwen3-tts"

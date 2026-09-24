@@ -337,7 +337,7 @@ func (s *EditorService) UploadWordAudio(ctx context.Context, id string, page int
 		for affectedPage := range pages {
 			if err := tx.Model(&model.TextbookDraftPage{}).
 				Where("draft_id=? AND position=?", id, affectedPage).
-				Updates(map[string]any{"audio_checked": false, "version": gorm.Expr("version+1")}).Error; err != nil {
+				Updates(map[string]any{"audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; err != nil {
 				return err
 			}
 		}
@@ -360,7 +360,6 @@ func (s *EditorService) UploadWordAudio(ctx context.Context, id string, page int
 	_ = os.Remove(backup)
 	return nil
 }
-
 
 func (s *EditorService) UploadSentenceAudio(ctx context.Context, id string, page int, itemID, visibleText, source string, version, actor uint64) error {
 	if itemID == "" || strings.TrimSpace(visibleText) == "" {
@@ -572,7 +571,7 @@ func (s *EditorService) UploadSentenceAudio(ctx context.Context, id string, page
 		}
 		if err := tx.Model(&model.TextbookDraftPage{}).
 			Where("draft_id=? AND position=?", id, page).
-			Updates(map[string]any{"audio_checked": false, "version": gorm.Expr("version+1")}).Error; err != nil {
+			Updates(map[string]any{"audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&locked).Updates(map[string]any{

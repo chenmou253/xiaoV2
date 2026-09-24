@@ -39,8 +39,8 @@ go run ./cmd/server bootstrap
 - 阅读：动态书架、页面目录和英美音点读；所有已发布教材均可直接阅读。
 - 管理员：独立登录/找回密码、创建/启停管理员、角色和权限分配。
 - 运维：学生启停、网站设置、操作审计。
-- 模型设置：后台从统一注册表读取 OCR/TTS 模型与音色；默认继续使用本地 PaddleOCR 与本地 Qwen3-TTS，可切换到百炼 `qwen3.5-ocr` / `qwen3-tts-flash`。
-- 教材：PDF 上传后只生成第 1 页 OCR；OCR 正文、坐标与置信度确认后才生成该页英美音频，试听确认后才可生成下一页 OCR；草稿复制、元信息/正文/坐标 JSON 编辑、整本审核、发布与上下架。
+- 模型设置：后台统一注册 OCR / 翻译 / TTS 模型与音色；翻译可在百炼 `qwen3.7-flash` 与本地 Apple MLX `Qwen3-4B-Instruct-2507-4bit` 间切换。
+- 教材：PDF 逐页完成 OCR、翻译和文字审核；文字确认后即可继续下一页，不再等待音频。TTS 是独立阶段，可按页或批量补齐，发布前再完成试听确认。
 - 工作任务：Gin 启动时内置教材 worker；也可单独执行 `go run ./cmd/server worker`。
 
 本地开发默认将验证/重置邮件写到 `.local/mail`，不会发送真实邮件。生产环境可清空 `DEV_MAIL_DIR` 并配置 SMTP。
@@ -71,7 +71,11 @@ storage/books/{book_id}/
 go run ./cmd/bookctl --publish import my-book
 ```
 
-PDF 转换需要本机 Poppler（`pdfinfo`、`pdftoppm`）。每一页先由 `pdftoppm` 以 300 DPI 渲染为最终 PNG；OCR 坐标归一化到该页面矩形（`[x,y,w,h]`），因而在任意屏幕尺寸都与 PNG 保持同一方向和位置。转换器优先检查 PDF 自带文本层；文本缺失或质量不合格时，使用常驻的 `ocr_daemon.py` 加载 PP-OCRv5 检测模型和 `PP-OCRv6_medium_rec` 识别模型，后续页面复用同一个模型进程，保留行和单词置信度、单词框并标记低置信度内容。OCR 会安全清洗引号、空白和省略号，过滤装饰性低置信度噪声，并把同段落中未以句末标点结束的视觉换行合并；标题、项目、表格和填空布局保持独立。管理后台的“一键补全翻译和音标”通过 `.env` 配置的阿里云百炼 OpenAI-compatible 接口（当前模型为 `qwen3.7-flash`）一次提交整页内容，再顺序执行整页翻译和整页审核；每页最多只有这两次模型调用，不按句子并发请求，限流会自动退避重试。音标仍由 `eng-to-ipa` 离线库补全，只填空白内容，不覆盖人工内容，按钮可重复点击。首次 OCR 会联网下载模型到 `.local/paddlex`，后续复用缓存；本项目不再依赖 Tesseract。
+PDF 转换需要本机 Poppler（`pdfinfo`、`pdftoppm`）。每一页先由 `pdftoppm` 以 300 DPI 渲染为最终 PNG；OCR 坐标归一化到该页面矩形（`[x,y,w,h]`），因而在任意屏幕尺寸都与 PNG 保持同一方向和位置。转换器优先检查 PDF 自带文本层；文本缺失或质量不合格时，使用常驻的 `ocr_daemon.py` 加载 PP-OCRv5 检测模型和 `PP-OCRv6_medium_rec` 识别模型，后续页面复用同一个模型进程，保留行和单词置信度、单词框并标记低置信度内容。OCR 会安全清洗引号、空白和省略号，过滤装饰性低置信度噪声，并把同段落中未以句末标点结束的视觉换行合并；标题、项目、表格和填空布局保持独立。管理后台的“一键补全翻译和音标”保留同一套整页 Prompt、JSON 协议、上下文词义、拼写复核和 General American IPA 规则。翻译模型可选百炼 `qwen3.7-flash`，也可选本地 `mlx-community/Qwen3-4B-Instruct-2507-4bit`。本地模型由 `translation_daemon.py` 常驻复用；云模型仍走 OpenAI-compatible API。两种后端都不自动重试。切换翻译模型只影响文字尚未确认的页面和后续页面，已确认文字页保留原翻译模型快照。首次 OCR 会联网下载模型到 `.local/paddlex`，后续复用缓存；本项目不再依赖 Tesseract。
+
+本地翻译依赖随 `requirements-translate.txt` 安装（Apple Silicon macOS 才安装 `mlx-lm`）。首次使用会从 Hugging Face 下载模型并使用其缓存；可用 `TRANSLATION_LOCAL_MODEL_REPO` 覆盖仓库，默认 `mlx-community/Qwen3-4B-Instruct-2507-4bit`，可用 `LOCAL_TRANSLATION_MAX_TOKENS` 调整单次本地输出上限（默认 16384）。本地翻译与本地 Qwen3-TTS 互斥驻留：开始本地翻译前释放空闲 TTS daemon，开始音频任务前释放翻译 daemon，避免 16GB Apple Silicon 同时驻留两套 Qwen 模型。
+
+翻译执行策略按模型分离：云端 `qwen3.7-flash` 保持整页严格 JSON Schema、单次翻译 + 单次审核、失败不自动重试/不自动切换模型；本地 Qwen3-4B 使用独立 JSON Prompt，并固定按每次只处理 1 个 segment 顺序处理。每个批次只发送一次共享 context，批内每个 item 只保留 `target_text + words`，避免把整页上下文重复塞进每个 segment。Translator 会根据该 segment 的实际单词数预先生成完整 `OUTPUT TEMPLATE`，包含固定数量的 `{"meaning":"","phonetic":""}` 槽位，要求模型只填写空字符串，不允许删除、重排或把 word 对象替换成源单词字符串；未知值保留空字符串。Local parser 只接受完整 JSON 对象，不再从带额外文本的输出中提取内部对象。Reviewer 固定使用 `LOCAL_REVIEWER_SYSTEM_PROMPT + local_review_prompt()`，同样按单-segment 批次执行；每批非法 JSON、截断或数组结构/数量不匹配只允许重生成 1 次，第二次仍失败即停止，不递归拆分、不猜修、不自动切换云模型。所有批次成功后程序再合并成整页结果。
 
 音频依赖见 `requirements-audio.txt`。常驻 Worker 支持 Apple MLX 的 `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit` 与 `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`，后台可无缝选择；同一时刻只允许一个本地 Qwen TTS daemon 驻留内存，模型切换会结束旧 daemon，新模型在下一次真正生成音频时懒加载并继续常驻复用。两个本地模型共用完全相同的英美音 speaker、instruct、采样参数和 QA 流程，同时复用 faster-whisper；现有单词音频缓存继续允许跨本地模型复用。每次仍会按页面、片段、单词位置和口音生成全新的独立 WAV，不按文本复用，也不从句子音频裁剪单词。临时 WAV 只有通过 ASR、词级时间戳/能量对齐、文件大小、静音、时长、削波、拖尾和重复检测后才原子写入正式 manifest。失败项最多重试 `AUDIO_MAX_RETRY` 次，最终失败 WAV 与 JSON 留在 `tts/audio_failed/`，逐条 QA 日志写入 `tts/qa/page-NNN.jsonl`。Qwen 与 Whisper 首次运行会下载到 Hugging Face 和 `AUDIO_ASR_CACHE` 缓存，之后可以离线推理。 0.6B 可用 `TTS_MODEL_06B`（旧 `TTS_MODEL` 仍兼容）覆盖模型仓库，1.7B 可用 `TTS_MODEL_17B` 覆盖；默认分别指向上述两个 MLX 8bit 仓库。TTS 服务必须从 Apple Silicon 原生终端启动，不能运行在没有 Metal 设备的虚拟或沙箱会话中。
 

@@ -46,14 +46,12 @@ TRANSLATOR_SYSTEM_PROMPT = """You are a professional English-to-Chinese translat
 
 Translate the TARGET TEXT into natural Simplified Chinese.
 
-You will receive CONTEXT to help resolve ambiguity.
-
 Rules:
 - Translate only TARGET TEXT.
-- CONTEXT is only for understanding. Never translate extra context.
+- Do not use or request external context.
 - Preserve the original meaning. Do not explain, expand, add, or omit information.
 - Use concise, natural Simplified Chinese suitable for Chinese students.
-- Resolve ambiguous words, pronouns, tense, phrases, and proper nouns from context.
+- Resolve ambiguous words, pronouns, tense, phrases, and proper nouns only from TARGET TEXT.
 - Use common Chinese forms for familiar names and places; never literally translate a person's name.
 - Preserve all numbers, dates, times, negation, and factual information.
 - Preserve punctuation meaning.
@@ -62,11 +60,11 @@ Rules:
 
 WORD_TRANSLATOR_SYSTEM_PROMPT = """You are a professional vocabulary editor for children's English textbooks.
 
-Translate only the TARGET WORD as it is used in the TARGET SENTENCE and CONTEXT.
+Translate only the TARGET WORD as it is used in the TARGET SENTENCE.
 
 Rules:
 - Return a concise Simplified Chinese meaning appropriate to this exact occurrence.
-- Use the sentence context to resolve part of speech and polysemy.
+- Use only the target sentence to resolve part of speech and polysemy.
 - Do not translate the whole sentence.
 - Do not provide dictionary meanings that do not apply here.
 - Preserve proper names using their common Chinese transliteration or standard Chinese name.
@@ -75,7 +73,7 @@ Rules:
 
 REVIEWER_SYSTEM_PROMPT = """You are a strict English-to-Chinese translation reviewer for children's textbooks.
 
-Review the CANDIDATE translation of TARGET TEXT using CONTEXT only for disambiguation.
+Review the CANDIDATE translation of TARGET TEXT using only TARGET TEXT.
 Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation,
 pronouns, serious number errors, natural Chinese, and information not present in the source.
 
@@ -96,7 +94,7 @@ BATCH_TRANSLATOR_SYSTEM_PROMPT = (
     + "\n\n"
     + WORD_TRANSLATOR_SYSTEM_PROMPT
     + "\n\n"
-    + "For this page-level request, translate every sentence and every listed word. "
+    + "For this page-level request, translate every sentence and every listed word using only each target sentence. "
     + "Override the single-item plain-text output format and return exactly one JSON object: "
     + '{"segments":[{"id":"segment id","translation":"...","words":[{"id":"word id","meaning":"...","phonetic":"..."}]}]}. '
     + "Keep every supplied segment and word ID exactly once, in any order. "
@@ -116,6 +114,120 @@ BATCH_REVIEWER_SYSTEM_PROMPT = (
     + "Reject British/non-rhotic variants when pronunciations differ; require post-vocalic /r/ and American /oʊ/ rather than British /əʊ/. "
     + "Correct an omitted, dialect-mismatched, or otherwise incorrect phonetic when you can determine it. Keep reasons brief and suggestions limited to the corrected field. Never output reasoning, Markdown, or a code fence."
 )
+
+LOCAL_TRANSLATOR_SYSTEM_PROMPT = """You are a deterministic structured translation engine for children's English textbooks.
+
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, notes, reasoning, or any text outside the JSON object.
+
+The request contains an ordered "items" array and an OUTPUT TEMPLATE whose array sizes are already correct.
+Use only each item's target_text and listed words. No external context is supplied.
+Copy the OUTPUT TEMPLATE structure exactly and fill only its empty string values.
+Return exactly this shape:
+{"segments":[{"translation":"...","words":[{"meaning":"...","phonetic":"..."}]}]}
+
+Critical structure rules:
+- NEVER output segment IDs or word IDs.
+- Output exactly one segments element for every input item, in the same order.
+- The OUTPUT TEMPLATE already contains the exact number of segments and word objects.
+- Copy that template exactly. Only replace empty string values with answers.
+- Inside each segment, preserve exactly one words element for every input word, in the same order.
+- Never replace a word object with the source word string.
+- Never add, omit, merge, split, or reorder segments or words.
+- NEVER omit a word object just because you are unsure of its answer.
+- If you cannot confidently determine a word's Chinese meaning, still return that word object with "meaning": "".
+- If you cannot confidently determine its General American IPA, still return that word object with "phonetic": "".
+- If both are unknown, return {"meaning":"","phonetic":""} for that position.
+- Empty strings are valid placeholders. The number of output word objects MUST always equal the number of input words.
+- Every translation and meaning must be a JSON string.
+- Every phonetic must be a JSON string.
+
+Translation rules:
+- Translate only target_text into concise natural Simplified Chinese suitable for Chinese students.
+- Use only target_text; do not request or infer external context.
+- Preserve meaning, negation, names, numbers, dates, times, and factual information.
+- For each word, return a concise Simplified Chinese dictionary-style meaning for that exact occurrence and grammatical role.
+- Do not return the whole sentence as a word meaning.
+- For every pronounceable English word, return General American English IPA with stress where appropriate.
+- Use rhotic American pronunciation and American /oʊ/ rather than British /əʊ/ when dialects differ.
+- Return an empty phonetic string only when the source is not pronounceable as an English word.
+"""
+
+LOCAL_REVIEWER_SYSTEM_PROMPT = """You are a deterministic reviewer for structured children's English textbook translations.
+
+Your entire response MUST be exactly one valid JSON object.
+Do not output Markdown, code fences, labels, explanations, reasoning, or any text outside the JSON object.
+
+The input contains ordered candidate segments and candidate words. Review each item using only its target_text. Do NOT output any source IDs.
+Return exactly:
+{"issues":[{"segment_index":0,"word_index":-1,"field":"translation","reason":"...","suggestion":"..."}]}
+
+Rules:
+- Return {"issues":[]} when everything is acceptable.
+- segment_index is the zero-based position in the supplied segments array.
+- For sentence translation issues, word_index MUST be -1 and field MUST be "translation".
+- For word issues, word_index is the zero-based word position inside that segment and field MUST be "meaning" or "phonetic".
+- Never invent an index outside the supplied arrays.
+- Include only actual errors.
+- Check omissions, additions, mistranslation, polysemy, names, numbers, dates, times, negation, pronouns, natural Chinese, and information not present in the source.
+- Check that each word meaning is a standalone lexical gloss for that exact occurrence.
+- Check that phonetics are General American English IPA, including stress where appropriate, with rhotic /r/ and American /oʊ/ where applicable.
+- suggestion contains only the corrected value for the named field.
+"""
+
+LOCAL_TRANSLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "translation": {"type": "string"},
+                    "words": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "meaning": {"type": "string"},
+                                "phonetic": {"type": "string"},
+                            },
+                            "required": ["meaning", "phonetic"],
+                        },
+                    },
+                },
+                "required": ["translation", "words"],
+            },
+        }
+    },
+    "required": ["segments"],
+}
+
+LOCAL_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "segment_index": {"type": "integer", "minimum": 0},
+                    "word_index": {"type": "integer", "minimum": -1},
+                    "field": {"type": "string", "enum": ["translation", "meaning", "phonetic"]},
+                    "reason": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+                "required": ["segment_index", "word_index", "field", "reason", "suggestion"],
+            },
+        }
+    },
+    "required": ["issues"],
+}
 
 SINGLE_REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -375,9 +487,26 @@ class OnlineLLMClient:
         if not response.choices:
             raise ValueError("translation API returned no choices")
         choice = response.choices[0]
-        if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
-            raise CompletionTruncated("translation completion reached its token limit")
         content = choice.message.content
+        if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
+            if _debug_enabled():
+                print(
+                    "[TRANSLATION TRUNCATED RESPONSE]",
+                    json.dumps(
+                        {
+                            "request_type": getattr(self, "request_type", "translation"),
+                            "page": getattr(self, "page_number", None),
+                            "model": self.model,
+                            "max_completion_tokens": max_completion_tokens,
+                            "finish_reason": getattr(choice, "finish_reason", None),
+                            "response": content if isinstance(content, str) else "",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            raise CompletionTruncated("translation completion reached its token limit")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("translation API returned empty content")
         return content
@@ -403,8 +532,165 @@ class OnlineLLMClient:
         )
 
 
+class LocalMLXBackend:
+    """Resident MLX backend for Apple Silicon local translation."""
+
+    def __init__(self, model_repo: str | None = None) -> None:
+        try:
+            from mlx_lm import generate, load
+            from mlx_lm.sample_utils import make_sampler
+        except ImportError as exc:
+            raise RuntimeError(
+                "mlx-lm is unavailable; install requirements-translate.txt"
+            ) from exc
+        self.model = "local-qwen3-4b-instruct-2507"
+        self.model_repo = (
+            model_repo
+            or os.getenv("TRANSLATION_LOCAL_MODEL_REPO", "").strip()
+            or "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+        )
+        self.operation_label = "本地整页翻译"
+        self.request_type = "page_translation"
+        self.page_number: int | str | None = None
+        self.attempt = 1
+        self.status_callback: Callable[[str], None] | None = None
+        try:
+            self.max_tokens = int(os.getenv("LOCAL_TRANSLATION_MAX_TOKENS", "16384"))
+        except ValueError as exc:
+            raise RuntimeError("LOCAL_TRANSLATION_MAX_TOKENS must be an integer") from exc
+        if self.max_tokens < 512:
+            raise RuntimeError("LOCAL_TRANSLATION_MAX_TOKENS must be at least 512")
+        started = time.monotonic()
+        load_target = self.model_repo
+        # After the first successful download, prefer the already cached
+        # Hugging Face snapshot. This makes translation -> TTS -> translation
+        # switching independent of Hub availability and avoids a transient 503
+        # just because the resident MLX model had to be loaded again.
+        if not Path(load_target).expanduser().exists():
+            try:
+                from huggingface_hub import snapshot_download
+                load_target = snapshot_download(
+                    repo_id=self.model_repo,
+                    local_files_only=True,
+                )
+            except Exception:
+                # First install/download still needs the normal mlx-lm Hub
+                # resolution. Do not hide that error if the actual load fails.
+                load_target = self.model_repo
+        self._model, self._tokenizer = load(load_target)
+        self._generate_fn = generate
+        # Translation is a deterministic data-processing task. Greedy sampling
+        # reduces JSON/ID drift compared with creative temperature sampling.
+        self._sampler = make_sampler(temp=0.0)
+        print(
+            "[TRANSLATION LOCAL HEALTH] "
+            f"model={self.model_repo} load_target={load_target} load_seconds={time.monotonic() - started:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def set_operation(self, label: str, request_type: str | None = None) -> None:
+        self.operation_label = label
+        if request_type:
+            self.request_type = request_type
+
+    def set_request_context(self, request_type: str, page: int | str | None, attempt: int) -> None:
+        self.request_type = request_type
+        self.page_number = page
+        self.attempt = attempt
+
+    def set_status_callback(self, callback: Callable[[str], None] | None) -> None:
+        self.status_callback = callback
+
+    def _report_status(self, message: str) -> None:
+        if self.status_callback is not None:
+            self.status_callback(message)
+
+    def record_failure(self, _request_type: str) -> None:
+        return None
+
+    def log_summary(self) -> None:
+        return None
+
+    def _prompt(self, system_prompt: str, user_prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        apply_template = getattr(self._tokenizer, "apply_chat_template", None)
+        if callable(apply_template):
+            try:
+                return apply_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return apply_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        return f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}\n\nASSISTANT:\n"
+
+    def generate(self, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+        prompt = self._prompt(system_prompt, user_prompt)
+        token_limit = min(max_tokens, self.max_tokens)
+        started = time.monotonic()
+        result = self._generate_fn(
+            self._model,
+            self._tokenizer,
+            prompt=prompt,
+            max_tokens=token_limit,
+            sampler=self._sampler,
+        )
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError("local translation model returned empty content")
+        print(
+            "[TRANSLATION LOCAL] "
+            + json.dumps(
+                {
+                    "request_type": self.request_type,
+                    "page": self.page_number,
+                    "model": self.model_repo,
+                    "latency_seconds": round(time.monotonic() - started, 3),
+                    "max_tokens": token_limit,
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        return result
+
+    def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_completion_tokens: int,
+        *,
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> str:
+        structured_system = (
+            system_prompt
+            + "\n\nReturn only valid JSON. The JSON must match this schema exactly:\n"
+            + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        )
+        return self.generate(structured_system, user_prompt, max_completion_tokens)
+
+
 class CompletionTruncated(RuntimeError):
     """The provider stopped at the requested output token cap."""
+
+
+DEBUG_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _debug_enabled() -> bool:
+    """Return whether application-wide debug logging is enabled."""
+    return os.getenv("APP_DEBUG", "").strip().lower() in DEBUG_TRUE_VALUES
 
 
 @dataclass
@@ -482,6 +768,16 @@ def _clean_json_payload(value: Any) -> str:
     if last_error is not None:
         raise last_error
     raise ValueError("structured response does not contain a JSON object")
+
+
+def _strict_local_json_payload(value: Any) -> str:
+    """Accept only the complete local-model JSON object, never an inner object."""
+    text = _remove_thinking(str(value or "").strip())
+    text = CODE_FENCE_RE.sub("", text).strip()
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise LocalStructureError("local structured response must be one complete JSON object")
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def parse_review(value: Any, candidate: str) -> ReviewResult:
@@ -565,21 +861,22 @@ def page_context(segments: list[dict[str, Any]], index: int, max_chars: int = 24
 
 
 def sentence_prompt(context: str, target: str) -> str:
-    return f"CONTEXT:\n{context}\n\nTARGET TEXT:\n{target}"
+    del context
+    return f"TARGET TEXT:\n{target}"
 
 
 def word_prompt(context: str, sentence: str, word: str) -> str:
+    del context
     return (
-        f"CONTEXT:\n{context}\n\n"
         f"TARGET SENTENCE:\n{sentence}\n\n"
         f"TARGET WORD:\n{word}"
     )
 
 
 def reviewer_prompt(kind: str, context: str, target: str, candidate: str) -> str:
+    del context
     return (
         f"TYPE: {kind}\n\n"
-        f"CONTEXT:\n{context}\n\n"
         f"TARGET TEXT:\n{target}\n\n"
         f"CANDIDATE CHINESE TRANSLATION:\n{candidate}"
     )
@@ -618,8 +915,8 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
                 {
                     "id": word_id,
                     "text": source,
-                    # Sending an existing value gives the reviewer context,
-                    # but the apply step below never overwrites it.
+                    # Existing phonetic is supplied only as the current field value;
+                    # the apply step below never overwrites a non-empty value.
                     "phonetic": str(word.get("phonetic", "") or "").strip(),
                 }
             )
@@ -627,7 +924,6 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
         items.append(
             {
                 "id": segment_id,
-                "context": page_context(segments, index),
                 "target_text": sentence,
                 "words": words,
             }
@@ -636,23 +932,402 @@ def _page_items(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
 
 
 def batch_translation_prompt(items: list[dict[str, Any]]) -> str:
+    model_items = [
+        {
+            "id": item["id"],
+            "target_text": item["target_text"],
+            "words": item["words"],
+        }
+        for item in items
+    ]
     return (
-        "Translate this entire textbook page. Each item has its own context; do not translate context. "
+        "Translate every supplied textbook-page item using only target_text and its listed words. "
         "Translate target_text as a sentence and each word only in its target sentence. Return General American English IPA for every word, even when the input phonetic is blank. Use rhotic American pronunciation, not British IPA. Existing phonetics are reference values only and must be preserved by the application.\n\n"
         "PAGE ITEMS:\n"
-        + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(model_items, ensure_ascii=False, separators=(",", ":"))
         + "\n\nReturn the exact page JSON shape required by the system instructions."
     )
 
 
 def batch_review_prompt(items: list[dict[str, Any]]) -> str:
+    model_items = [
+        {key: value for key, value in item.items() if key != "context"}
+        for item in items
+    ]
     return (
-        "Review every candidate in this entire textbook page. Use each item's context only for disambiguation. "
+        "Review every supplied textbook-page candidate using only each target_text and candidate fields. "
         "Correct omissions, additions, mistranslations, names, numbers, negation, and word polysemy.\n\n"
         "PAGE CANDIDATES:\n"
-        + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(model_items, ensure_ascii=False, separators=(",", ":"))
         + "\n\nReturn the exact page review JSON shape required by the system instructions."
     )
+
+
+
+STRUCTURAL_ID_RE = re.compile(r"^p0*(\d+)-s0*(\d+)(?:-w0*(\d+))?$", re.IGNORECASE)
+
+
+def _canonical_structural_id(value: Any) -> str | None:
+    text = str(value or "").strip()
+    match = STRUCTURAL_ID_RE.fullmatch(text)
+    if not match:
+        return None
+    page = int(match.group(1))
+    segment = int(match.group(2))
+    word = match.group(3)
+    if word is None:
+        return f"p{page}-s{segment}"
+    return f"p{page}-s{segment}-w{int(word)}"
+
+
+def _resolve_expected_id(value: Any, expected_ids: set[str], label: str) -> str:
+    """Resolve only exact IDs or structurally identical IDs with leading zeros.
+
+    Examples:
+      p053-s012 -> p53-s12
+      p053-s012-w002 -> p53-s12-w2
+
+    No fuzzy edit distance, index correction, or positional guessing is allowed.
+    """
+    raw = str(value or "").strip()
+    if raw in expected_ids:
+        return raw
+    canonical = _canonical_structural_id(raw)
+    if canonical is None:
+        raise ValueError(f"batch translator returned unexpected {label} id: {raw}")
+    matches = [
+        candidate
+        for candidate in expected_ids
+        if _canonical_structural_id(candidate) == canonical
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"batch translator returned unexpected {label} id: {raw}")
+    return matches[0]
+
+
+class LocalStructureError(ValueError):
+    """Local-model output is syntactically valid enough to inspect but structurally unusable."""
+
+
+LOCAL_TRANSLATION_BATCH_SEGMENTS = 1
+
+
+def _local_shared_context(items: list[dict[str, Any]]) -> str:
+    """Use the current batch text once as shared context instead of repeating page context per item."""
+    seen: set[str] = set()
+    lines: list[str] = []
+    for item in items:
+        text = normalize_source_text(item.get("target_text", ""))
+        if text and text not in seen:
+            seen.add(text)
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _local_item_batches(
+    items: list[dict[str, Any]],
+    batch_size: int = LOCAL_TRANSLATION_BATCH_SEGMENTS,
+) -> list[list[dict[str, Any]]]:
+    if batch_size < 1:
+        raise ValueError("local translation batch size must be at least 1")
+    return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
+
+
+def local_translation_output_template(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the exact positional JSON skeleton the local translator must fill."""
+    return {
+        "segments": [
+            {
+                "translation": "",
+                "words": [
+                    {"meaning": "", "phonetic": ""}
+                    for _ in item["words"]
+                ],
+            }
+            for item in items
+        ]
+    }
+
+
+def local_translation_prompt(items: list[dict[str, Any]]) -> str:
+    payload = {
+        "items": [
+            {
+                "target_text": item["target_text"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "phonetic": word.get("phonetic", ""),
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ],
+    }
+    output_template = local_translation_output_template(items)
+    return (
+        "Translate the following ordered textbook batch. "
+        "Use only each item's target_text and listed words. No shared context is provided. "
+        "Do not output or reconstruct any source IDs. "
+        "The OUTPUT TEMPLATE already has the exact required array lengths. "
+        "Copy its JSON structure exactly and ONLY replace empty string values. "
+        "Never replace a word object with source text. "
+        "If an answer is unknown, leave that value as an empty string.\n\n"
+        "SOURCE INPUT:\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        + "\n\nOUTPUT TEMPLATE:\n"
+        + json.dumps(output_template, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def parse_local_translation(
+    value: Any,
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    payload = json.loads(_strict_local_json_payload(value))
+    if set(payload) != {"segments"}:
+        raise LocalStructureError("local translator response must contain only a segments array")
+    raw_segments = payload["segments"]
+    if not isinstance(raw_segments, list):
+        raise LocalStructureError("local translator segments must be an array")
+    if len(raw_segments) != len(items):
+        raise LocalStructureError(
+            f"local translator segment count mismatch: got {len(raw_segments)}, want {len(items)}"
+        )
+
+    result: dict[str, dict[str, Any]] = {}
+    for segment_index, (raw_segment, item) in enumerate(zip(raw_segments, items)):
+        if not isinstance(raw_segment, dict) or set(raw_segment) != {"translation", "words"}:
+            raise LocalStructureError(f"local translator segment {segment_index} has an invalid shape")
+        translation = clean_translation(raw_segment.get("translation", ""))
+        if not translation:
+            raise ValueError(f"local translator returned empty translation at segment {segment_index}")
+        raw_words = raw_segment.get("words")
+        if not isinstance(raw_words, list):
+            raise LocalStructureError(f"local translator words must be an array at segment {segment_index}")
+        expected_words = item["words"]
+        if len(raw_words) != len(expected_words):
+            raise LocalStructureError(
+                f"local translator word count mismatch at segment {segment_index}: "
+                f"got {len(raw_words)}, want {len(expected_words)}"
+            )
+        words: dict[str, dict[str, str]] = {}
+        for word_index, (raw_word, source_word) in enumerate(zip(raw_words, expected_words)):
+            if not isinstance(raw_word, dict) or set(raw_word) != {"meaning", "phonetic"}:
+                raise LocalStructureError(
+                    f"local translator word {segment_index}:{word_index} has an invalid shape"
+                )
+            meaning_value = raw_word.get("meaning")
+            if not isinstance(meaning_value, str):
+                raise ValueError(
+                    f"local translator returned invalid meaning at {segment_index}:{word_index}"
+                )
+            phonetic_value = raw_word.get("phonetic")
+            if not isinstance(phonetic_value, str):
+                raise ValueError(
+                    f"local translator returned invalid phonetic at {segment_index}:{word_index}"
+                )
+            words[str(source_word["id"])] = {
+                "meaning": clean_translation(meaning_value),
+                "phonetic": clean_phonetic(phonetic_value),
+            }
+        result[str(item["id"])] = {
+            "translation": translation,
+            "words": words,
+        }
+    return result
+
+
+def local_review_prompt(
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> str:
+    payload = {
+        "segments": [
+            {
+                "target_text": item["target_text"],
+                "candidate_translation": candidates[item["id"]]["translation"],
+                "words": [
+                    {
+                        "text": word["text"],
+                        "candidate_meaning": candidates[item["id"]]["words"][word["id"]]["meaning"],
+                        "candidate_phonetic": candidates[item["id"]]["words"][word["id"]]["phonetic"],
+                    }
+                    for word in item["words"]
+                ],
+            }
+            for item in items
+        ],
+    }
+    return (
+        "Review the following ordered textbook translation batch. "
+        "Use only each candidate's target_text. No shared context is provided. "
+        "Refer to items only by zero-based segment_index and word_index within this batch. "
+        "Do not output or reconstruct source IDs.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def parse_local_review(
+    value: Any,
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    payload = json.loads(_strict_local_json_payload(value))
+    if not isinstance(payload, dict) or set(payload) != {"issues"}:
+        raise LocalStructureError("local reviewer response must contain only an issues array")
+    issues = payload["issues"]
+    if not isinstance(issues, list):
+        raise LocalStructureError("local reviewer issues must be an array")
+
+    result = fallback_review(candidates)
+    seen: set[tuple[int, int, str]] = set()
+    for raw in issues:
+        required = {"segment_index", "word_index", "field", "reason", "suggestion"}
+        if not isinstance(raw, dict) or set(raw) != required:
+            raise LocalStructureError("local reviewer issue has an invalid shape")
+        segment_index = raw["segment_index"]
+        word_index = raw["word_index"]
+        field = str(raw["field"]).strip()
+        reason = str(raw["reason"]).strip()
+        suggestion = str(raw["suggestion"]).strip()
+        if not isinstance(segment_index, int) or isinstance(segment_index, bool):
+            raise LocalStructureError("local reviewer segment_index must be an integer")
+        if not isinstance(word_index, int) or isinstance(word_index, bool):
+            raise LocalStructureError("local reviewer word_index must be an integer")
+        if segment_index < 0 or segment_index >= len(items):
+            raise LocalStructureError(f"local reviewer segment_index out of range: {segment_index}")
+        if field not in {"translation", "meaning", "phonetic"} or not reason:
+            raise ValueError("local reviewer issue has an invalid field or reason")
+
+        item = items[segment_index]
+        segment_id = str(item["id"])
+        if field == "translation":
+            if word_index != -1:
+                raise LocalStructureError("local sentence translation issue must use word_index=-1")
+            correction = clean_translation(suggestion)
+            if not correction:
+                raise ValueError("local sentence translation correction must not be empty")
+            result[segment_id]["translation"] = correction
+            result[segment_id]["issues"].append(reason)
+            result[segment_id]["passed"] = False
+        else:
+            if word_index < 0 or word_index >= len(item["words"]):
+                raise LocalStructureError(
+                    f"local reviewer word_index out of range: {segment_index}:{word_index}"
+                )
+            word_id = str(item["words"][word_index]["id"])
+            word_result = result[segment_id]["words"][word_id]
+            if field == "meaning":
+                correction = clean_translation(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local word meaning correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["meaning"] = correction
+            else:
+                correction = clean_phonetic(suggestion)
+                if not correction:
+                    raise ValueError(
+                        f"local phonetic correction must not be empty: {segment_index}:{word_index}"
+                    )
+                word_result["phonetic"] = correction
+            word_result["issues"].append(reason)
+            result[segment_id]["passed"] = False
+
+        issue_key = (segment_index, word_index, field)
+        if issue_key in seen:
+            raise LocalStructureError("local reviewer returned a duplicate issue")
+        seen.add(issue_key)
+    return result
+
+
+def _is_local_retryable_structure_error(exc: Exception) -> bool:
+    # Local inference may regenerate the same whole-page request once when the
+    # output itself is malformed/truncated. Semantic/count mismatches remain
+    # hard failures so we never guess how to realign textbook content.
+    if isinstance(exc, (json.JSONDecodeError, CompletionTruncated, LocalStructureError)):
+        return True
+    return isinstance(exc, ValueError) and str(exc) == "structured response does not contain a JSON object"
+
+
+def _local_structured_call(
+    backend: LocalMLXBackend,
+    system_prompt: str,
+    prompt: str,
+    *,
+    kind: str,
+    page: int | str | None,
+    parser: Any,
+    schema: dict[str, Any],
+    max_completion_tokens: int,
+) -> Any:
+    """Run one local structured request and regenerate malformed/invalid output once."""
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        raw: str | None = None
+        try:
+            _set_request_context(backend, kind, page, attempt)
+            retry_instruction = ""
+            if attempt == 2:
+                retry_instruction = (
+                    "\n\nPREVIOUS OUTPUT WAS INVALID OR TRUNCATED JSON. "
+                    "Regenerate the entire same request from scratch. Return ONLY one "
+                    "complete JSON object. Copy the supplied OUTPUT TEMPLATE structure exactly; "
+                    "keep every array length and position unchanged. Do not output IDs."
+                )
+            raw = _generate_once(
+                backend,
+                system_prompt + retry_instruction,
+                prompt,
+                max_completion_tokens,
+                schema_name=kind,
+                schema=schema,
+            )
+            return parser(raw)
+        except Exception as exc:
+            last_error = exc
+            if raw is not None:
+                print(
+                    "[TRANSLATION RAW RESPONSE]",
+                    json.dumps(
+                        {
+                            "request_type": kind,
+                            "page": page,
+                            "attempt": attempt,
+                            "model": getattr(backend, "model", ""),
+                            "response": raw,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            log_failure(
+                kind=kind,
+                target="local_page",
+                context="",
+                error=exc,
+                attempt=attempt,
+                page=page,
+                model=getattr(backend, "model", ""),
+                raw=raw,
+            )
+            if attempt == 1 and _is_local_retryable_structure_error(exc):
+                print(
+                    json.dumps(
+                        {
+                            "event": "status",
+                            "message": "本地模型结构化输出无效，正在仅重生成本页一次",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                continue
+            raise
+    raise last_error or RuntimeError("local structured generation failed")
 
 
 def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
@@ -663,9 +1338,10 @@ def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[s
     for raw in payload["segments"]:
         if not isinstance(raw, dict):
             raise ValueError("batch translator segment must be an object")
-        segment_id = str(raw.get("id", "")).strip()
-        if segment_id in result or segment_id not in expected:
-            raise ValueError(f"batch translator returned unexpected segment id: {segment_id}")
+        raw_segment_id = str(raw.get("id", "")).strip()
+        segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
+        if segment_id in result:
+            raise ValueError(f"batch translator returned duplicate segment id: {raw_segment_id}")
         translation = clean_translation(raw.get("translation", ""))
         if not translation:
             raise ValueError(f"batch translator returned empty translation: {segment_id}")
@@ -676,9 +1352,10 @@ def parse_batch_translation(value: Any, expected: dict[str, set[str]]) -> dict[s
         for word in raw_words:
             if not isinstance(word, dict):
                 raise ValueError(f"batch translator word must be an object: {segment_id}")
-            word_id = str(word.get("id", "")).strip()
-            if word_id in words or word_id not in expected[segment_id]:
-                raise ValueError(f"batch translator returned unexpected word id: {word_id}")
+            raw_word_id = str(word.get("id", "")).strip()
+            word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
+            if word_id in words:
+                raise ValueError(f"batch translator returned duplicate word id: {raw_word_id}")
             meaning = clean_translation(word.get("meaning", ""))
             if not meaning:
                 raise ValueError(f"batch translator returned empty meaning: {word_id}")
@@ -731,13 +1408,16 @@ def parse_batch_review(
         required = {"segment_id", "word_id", "field", "reason", "suggestion"}
         if not isinstance(raw, dict) or set(raw) != required:
             raise ValueError("batch reviewer issue has an invalid shape")
-        segment_id = str(raw["segment_id"]).strip()
-        word_id = str(raw["word_id"]).strip()
+        raw_segment_id = str(raw["segment_id"]).strip()
+        try:
+            segment_id = _resolve_expected_id(raw_segment_id, set(expected), "segment")
+        except ValueError as exc:
+            raise ValueError(f"batch reviewer returned unexpected segment id: {raw_segment_id}") from exc
+        raw_word_id = str(raw["word_id"]).strip()
+        word_id = raw_word_id
         field = str(raw["field"]).strip()
         reason = str(raw["reason"]).strip()
         suggestion = str(raw["suggestion"]).strip()
-        if segment_id not in expected:
-            raise ValueError(f"batch reviewer returned unexpected segment id: {segment_id}")
         if field not in {"translation", "meaning", "phonetic"} or not reason:
             raise ValueError("batch reviewer issue has an invalid field or reason")
         if field == "translation":
@@ -750,8 +1430,10 @@ def parse_batch_review(
             result[segment_id]["issues"].append(reason)
             result[segment_id]["passed"] = False
         else:
-            if word_id not in expected[segment_id]:
-                raise ValueError(f"batch reviewer returned unexpected word id: {word_id}")
+            try:
+                word_id = _resolve_expected_id(raw_word_id, expected[segment_id], "word")
+            except ValueError as exc:
+                raise ValueError(f"batch reviewer returned unexpected word id: {raw_word_id}") from exc
             word_result = result[segment_id]["words"][word_id]
             if field == "meaning":
                 correction = clean_translation(suggestion)
@@ -878,7 +1560,7 @@ def log_translation(
         payload["score"] = round(result.score, 4)
     if result.issues:
         payload["issues"] = result.issues
-    if os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+    if _debug_enabled():
         payload["source_preview"] = target[:120]
         payload["translation_preview"] = result.translation[:120]
     prefix = "[TRANSLATION WARNING]" if result.review != "PASS" else "[TRANSLATION]"
@@ -895,6 +1577,8 @@ def log_failure(
     page: int | str | None = None,
     model: str = "",
     raw: str | None = None,
+    batch_index: int | None = None,
+    batch_total: int | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "request_type": kind,
@@ -908,10 +1592,19 @@ def log_failure(
     }
     if raw is not None:
         payload["response_length"] = len(raw)
+    if batch_index is not None:
+        payload["batch"] = batch_index
+    if batch_total is not None:
+        payload["batch_total"] = batch_total
     if isinstance(error, json.JSONDecodeError):
         payload.update({"line": error.lineno, "column": error.colno, "position": error.pos})
-    if raw is not None and os.getenv("TRANSLATION_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+    if raw is not None and _debug_enabled():
         payload["response_preview"] = raw[:1200]
+        if isinstance(error, json.JSONDecodeError):
+            start = max(0, error.pos - 240)
+            end = min(len(raw), error.pos + 240)
+            payload["response_error_context_start"] = start
+            payload["response_error_context"] = raw[start:end]
     print(
         "[TRANSLATION WARNING]",
         json.dumps(payload, ensure_ascii=False),
@@ -1073,6 +1766,226 @@ def translate_target(
     )
 
 
+def build_review_items(
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    review_items: list[dict[str, Any]] = []
+    for item in items:
+        candidate = candidates[item["id"]]
+        review_items.append(
+            {
+                "id": item["id"],
+                "target_text": item["target_text"],
+                "candidate_translation": candidate["translation"],
+                "words": [
+                    {
+                        "id": word["id"],
+                        "text": word["text"],
+                        "candidate_meaning": candidate["words"][word["id"]]["meaning"],
+                        "candidate_phonetic": candidate["words"][word["id"]]["phonetic"],
+                    }
+                    for word in item["words"]
+                ],
+            }
+        )
+    return review_items
+
+
+def expected_for_items(items: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Build the exact segment/word ID shape expected from validated local batches."""
+    return {
+        str(item["id"]): {str(word["id"]) for word in item["words"]}
+        for item in items
+    }
+
+
+def validate_complete_candidates(
+    candidates: dict[str, dict[str, Any]],
+    expected: dict[str, set[str]],
+) -> None:
+    """Verify that a local batch/merged page contains every expected item exactly once."""
+    if set(candidates) != set(expected):
+        missing = sorted(set(expected) - set(candidates))
+        extra = sorted(set(candidates) - set(expected))
+        raise LocalStructureError(
+            f"local translator segment IDs do not match input: missing={missing} extra={extra}"
+        )
+
+    for segment_id, expected_words in expected.items():
+        candidate = candidates.get(segment_id)
+        if not isinstance(candidate, dict):
+            raise LocalStructureError(
+                f"local translator candidate is invalid for segment {segment_id}"
+            )
+        translation = clean_translation(candidate.get("translation", ""))
+        if not translation:
+            raise ValueError(
+                f"local translator returned empty translation: {segment_id}"
+            )
+        words = candidate.get("words")
+        if not isinstance(words, dict):
+            raise LocalStructureError(
+                f"local translator words are invalid for segment {segment_id}"
+            )
+        if set(words) != expected_words:
+            missing = sorted(expected_words - set(words))
+            extra = sorted(set(words) - expected_words)
+            raise LocalStructureError(
+                f"local translator word IDs do not match segment {segment_id}: "
+                f"missing={missing} extra={extra}"
+            )
+        for word_id in expected_words:
+            word = words[word_id]
+            if not isinstance(word, dict):
+                raise LocalStructureError(
+                    f"local translator word candidate is invalid: {word_id}"
+                )
+            if not isinstance(word.get("meaning"), str):
+                raise LocalStructureError(
+                    f"local translator returned invalid meaning: {word_id}"
+                )
+            if not isinstance(word.get("phonetic"), str):
+                raise LocalStructureError(
+                    f"local translator returned invalid phonetic: {word_id}"
+                )
+
+
+def fallback_review(
+    candidates: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    return {
+        segment_id: {
+            "translation": candidate["translation"],
+            "issues": [],
+            "passed": True,
+            "score": None,
+            "words": {
+                word_id: {
+                    "meaning": word["meaning"],
+                    "phonetic": word["phonetic"],
+                    "issues": [],
+                    "score": None,
+                }
+                for word_id, word in candidate["words"].items()
+            },
+        }
+        for segment_id, candidate in candidates.items()
+    }
+
+
+def local_translate_candidates(
+    backend: LocalMLXBackend,
+    items: list[dict[str, Any]],
+    expected: dict[str, set[str]],
+    *,
+    page: int | str | None,
+    max_completion_tokens: int,
+) -> dict[str, dict[str, Any]]:
+    batches = _local_item_batches(items)
+    merged: dict[str, dict[str, Any]] = {}
+    total_batches = len(batches)
+
+    for batch_index, batch_items in enumerate(batches, 1):
+        word_count = sum(len(item["words"]) for item in batch_items)
+        print(
+            json.dumps(
+                {
+                    "event": "status",
+                    "message": (
+                        f"本地分批翻译 {batch_index}/{total_batches}："
+                        f"{len(batch_items)} 个片段，{word_count} 个单词；"
+                        "每次只处理 1 个片段，不发送 context"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        batch_candidates = _local_structured_call(
+            backend,
+            LOCAL_TRANSLATOR_SYSTEM_PROMPT,
+            local_translation_prompt(batch_items),
+            kind="page_translation",
+            page=page,
+            parser=lambda raw, current=batch_items: parse_local_translation(raw, current),
+            schema=LOCAL_TRANSLATION_SCHEMA,
+            max_completion_tokens=min(
+                max_completion_tokens,
+                max(2048, 768 + word_count * 112 + len(batch_items) * 192),
+            ),
+        )
+        validate_complete_candidates(
+            batch_candidates,
+            expected_for_items(batch_items),
+        )
+        merged.update(batch_candidates)
+
+    validate_complete_candidates(merged, expected)
+    return merged
+
+
+def local_review_candidates(
+    backend: LocalMLXBackend,
+    items: list[dict[str, Any]],
+    candidates: dict[str, dict[str, Any]],
+    *,
+    page: int | str | None,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    batches = _local_item_batches(items)
+    merged: dict[str, dict[str, Any]] = {}
+    review_failed = False
+
+    for batch_index, batch_items in enumerate(batches, 1):
+        batch_candidates = {
+            str(item["id"]): candidates[str(item["id"])]
+            for item in batch_items
+        }
+        try:
+            batch_reviewed = _local_structured_call(
+                backend,
+                LOCAL_REVIEWER_SYSTEM_PROMPT,
+                local_review_prompt(batch_items, batch_candidates),
+                kind="page_review",
+                page=page,
+                parser=lambda raw, current=batch_items, current_candidates=batch_candidates: parse_local_review(
+                    raw,
+                    current,
+                    current_candidates,
+                ),
+                schema=LOCAL_REVIEW_SCHEMA,
+                max_completion_tokens=max(
+                    1024,
+                    256
+                    + sum(len(item["words"]) for item in batch_items) * 40
+                    + len(batch_items) * 64,
+                ),
+            )
+        except Exception as exc:
+            review_failed = True
+            batch_reviewed = fallback_review(batch_candidates)
+            print(
+                "[TRANSLATION REVIEW WARNING]",
+                json.dumps(
+                    {
+                        "request_type": "page_review",
+                        "page": page,
+                        "batch": batch_index,
+                        "model": getattr(backend, "model", ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                        "fallback": "kept_validated_local_batch_translation",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        merged.update(batch_reviewed)
+
+    return merged, review_failed
+
+
 def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[str, Any]:
     raw_segments = content.get("segments", [])
     if not isinstance(raw_segments, list):
@@ -1095,89 +2008,71 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
     )
 
     print(json.dumps({"event": "progress", "stage": "translator", "progress": 0, "total": 2}), flush=True)
-    candidates = _batch_generate(
-        backend,
-        BATCH_TRANSLATOR_SYSTEM_PROMPT,
-        batch_translation_prompt(items),
-        kind="page_translation",
-        stage_label="整页翻译",
-        parser=lambda raw: parse_batch_translation(raw, expected),
-        schema=BATCH_TRANSLATION_SCHEMA,
-        page=page_number,
-        max_completion_tokens=translation_token_budget,
-    )
-    print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
-    review_items = []
-    for item in items:
-        candidate = candidates[item["id"]]
-        review_items.append(
-            {
-                "id": item["id"],
-                "context": item["context"],
-                "target_text": item["target_text"],
-                "candidate_translation": candidate["translation"],
-                "words": [
-                    {
-                        "id": word["id"],
-                        "text": word["text"],
-                        "candidate_meaning": candidate["words"][word["id"]]["meaning"],
-                        "candidate_phonetic": candidate["words"][word["id"]]["phonetic"],
-                    }
-                    for word in item["words"]
-                ],
-            }
-        )
-    review_failed = False
-    try:
-        reviewed = _batch_generate(
+    if isinstance(backend, LocalMLXBackend):
+        candidates = local_translate_candidates(
             backend,
-            BATCH_REVIEWER_SYSTEM_PROMPT,
-            batch_review_prompt(review_items),
-            kind="page_review",
-            stage_label="整页审核",
-            parser=lambda raw: parse_batch_review(raw, candidates, expected),
-            schema=BATCH_REVIEW_SCHEMA,
+            items,
+            expected,
             page=page_number,
-            max_completion_tokens=review_token_budget,
+            max_completion_tokens=translation_token_budget,
         )
-    except Exception as exc:
-        # Review only improves quality; a completed translation remains usable
-        # if every review attempt fails. Keep translator candidates untouched.
-        review_failed = True
-        reviewed = {
-            segment_id: {
-                "translation": candidate["translation"],
-                "issues": [],
-                "passed": True,
-                "score": None,
-                "words": {
-                    word_id: {
-                        "meaning": word["meaning"],
-                        "phonetic": word["phonetic"],
-                        "issues": [],
-                        "score": None,
-                    }
-                    for word_id, word in candidate["words"].items()
-                },
-            }
-            for segment_id, candidate in candidates.items()
-        }
-        print(
-            "[TRANSLATION REVIEW WARNING]",
-            json.dumps(
-                {
-                    "request_type": "page_review",
-                    "page": page_number,
-                    "model": getattr(backend, "model", ""),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:800],
-                    "fallback": "kept_page_translation",
-                },
-                ensure_ascii=False,
-            ),
-            file=sys.stderr,
-            flush=True,
+        print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
+        reviewed, review_failed = local_review_candidates(
+            backend,
+            items,
+            candidates,
+            page=page_number,
         )
+    else:
+        # Cloud policy stays intentionally strict: one page translation call,
+        # one page review call, no automatic retries or model fallback.
+        candidates = _batch_generate(
+            backend,
+            BATCH_TRANSLATOR_SYSTEM_PROMPT,
+            batch_translation_prompt(items),
+            kind="page_translation",
+            stage_label="整页翻译",
+            parser=lambda raw: parse_batch_translation(raw, expected),
+            schema=BATCH_TRANSLATION_SCHEMA,
+            page=page_number,
+            max_completion_tokens=translation_token_budget,
+        )
+        print(json.dumps({"event": "progress", "stage": "reviewer", "progress": 1, "total": 2}), flush=True)
+        review_items = build_review_items(items, candidates)
+        review_failed = False
+        try:
+            reviewed = _batch_generate(
+                backend,
+                BATCH_REVIEWER_SYSTEM_PROMPT,
+                batch_review_prompt(review_items),
+                kind="page_review",
+                stage_label="整页审核",
+                parser=lambda raw: parse_batch_review(raw, candidates, expected),
+                schema=BATCH_REVIEW_SCHEMA,
+                page=page_number,
+                max_completion_tokens=review_token_budget,
+            )
+        except Exception as exc:
+            # A successful cloud translation is retained when only the review
+            # response fails. There is still no retry and no automatic fallback.
+            review_failed = True
+            reviewed = fallback_review(candidates)
+            print(
+                "[TRANSLATION REVIEW WARNING]",
+                json.dumps(
+                    {
+                        "request_type": "page_review",
+                        "page": page_number,
+                        "model": getattr(backend, "model", ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                        "fallback": "kept_page_translation",
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
     print(json.dumps({"event": "progress", "stage": "done", "progress": 2, "total": 2}), flush=True)
 
     # Coordinates, OCR confidence, IDs, images, and audio metadata are never
@@ -1210,14 +2105,22 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
         log_translation(
             kind="sentence",
             target=target_sentence(segment),
-            context=next(item["context"] for item in items if item["id"] == segment_id),
+            context="",
             result=TranslationResult(result["translation"], result.get("score"), segment_issues, review_status),
         )
         words_by_id = {str(word.get("id", "")): word for word in segment.get("words", []) if isinstance(word, dict)}
         for word_id, word_result in result["words"].items():
             word = words_by_id[word_id]
             source = normalize_source_text(word.get("text", ""))
-            word["meaning"] = word_result["meaning"]
+            word_issues = list(word_result["issues"])
+            meaning = clean_translation(word_result.get("meaning", ""))
+            if meaning:
+                word["meaning"] = meaning
+            else:
+                empty_issue = "empty meaning placeholder; manual review required"
+                if empty_issue not in word_issues:
+                    word_issues.append(empty_issue)
+
             if not str(word.get("phonetic", "") or "").strip():
                 phonetic = clean_phonetic(word_result.get("phonetic", ""))
                 # A model occasionally echoes the English token instead of IPA.
@@ -1226,18 +2129,22 @@ def translate_page(content: dict[str, Any], backend: GenerationBackend) -> dict[
                     phonetic_filled += 1
                 else:
                     phonetic_missing += 1
+                    empty_phonetic_issue = "empty or invalid phonetic placeholder; manual review required"
+                    if empty_phonetic_issue not in word_issues:
+                        word_issues.append(empty_phonetic_issue)
+
             translated += 1
-            if word_result["issues"]:
+            if word_issues:
                 failed += 1
             log_translation(
                 kind="word",
                 target=source,
                 context=target_sentence(segment),
                 result=TranslationResult(
-                    word_result["meaning"],
+                    meaning or str(word.get("meaning", "") or ""),
                     word_result.get("score"),
-                    word_result["issues"],
-                    "REVIEW_WARNING" if review_failed else "PASS" if not word_result["issues"] else "WARNING",
+                    word_issues,
+                    "REVIEW_WARNING" if review_failed else "PASS" if not word_issues else "WARNING",
                 ),
             )
 
@@ -1264,7 +2171,12 @@ def _required_env(name: str) -> str:
     return value
 
 
-def configured_backend() -> OnlineLLMClient:
+def configured_backend(model_id: str = "") -> GenerationBackend:
+    selected = (model_id or os.getenv("TRANSLATION_MODEL", "")).strip()
+    if selected == "local-qwen3-4b-instruct-2507":
+        return LocalMLXBackend()
+    if not selected:
+        selected = _required_env("TRANSLATION_MODEL")
     try:
         connect_timeout = float(os.getenv("TRANSLATION_CONNECT_TIMEOUT", "10"))
         read_timeout = float(os.getenv("TRANSLATION_READ_TIMEOUT", "90"))
@@ -1272,10 +2184,16 @@ def configured_backend() -> OnlineLLMClient:
         raise RuntimeError("Invalid translation API timeout configuration") from exc
     if connect_timeout <= 0 or read_timeout <= 0:
         raise RuntimeError("Translation API timeouts must be positive")
+    api_key = os.getenv("TRANSLATION_API_KEY", "").strip() or os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("TRANSLATION_API_KEY or DASHSCOPE_API_KEY is not set")
+    base_url = os.getenv("TRANSLATION_API_BASE_URL", "").strip() or os.getenv("DASHSCOPE_BASE_URL", "").strip()
+    if not base_url:
+        raise RuntimeError("TRANSLATION_API_BASE_URL or DASHSCOPE_BASE_URL is not set")
     return OnlineLLMClient(
-        base_url=_required_env("TRANSLATION_API_BASE_URL"),
-        api_key=_required_env("TRANSLATION_API_KEY"),
-        model=_required_env("TRANSLATION_MODEL"),
+        base_url=base_url,
+        api_key=api_key,
+        model=selected,
         temperature=0.1,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
@@ -1286,11 +2204,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-id", default="")
     args = parser.parse_args()
 
-    backend: OnlineLLMClient | None = None
+    backend: GenerationBackend | None = None
     try:
-        backend = configured_backend()
+        backend = configured_backend(args.model_id)
         content = json.loads(args.input.read_text(encoding="utf-8"))
         translated = translate_page(content, backend)
         args.output.write_text(
@@ -1301,7 +2220,9 @@ def main() -> None:
         raise SystemExit(str(exc)) from exc
     finally:
         if backend is not None:
-            backend.log_summary()
+            logger = getattr(backend, "log_summary", None)
+            if callable(logger):
+                logger()
 
 
 if __name__ == "__main__":

@@ -104,6 +104,7 @@ type PageVersion struct {
 type TextbookDraft struct {
 	ID                 string `gorm:"size:36;primaryKey" json:"id"`
 	BookID             string `gorm:"size:80;not null;index" json:"book_id"`
+	SourceKind         string `gorm:"size:20;not null;default:'upload'" json:"source_kind"`
 	Title              string `gorm:"size:200;not null" json:"title"`
 	Grade              int    `gorm:"not null" json:"grade"`
 	Term               string `gorm:"size:20;not null" json:"term"`
@@ -114,6 +115,7 @@ type TextbookDraft struct {
 	BritishVoiceID     string `gorm:"size:80;not null;default:'ryan'" json:"british_voice_id"`
 	AudioConfigVersion uint64 `gorm:"not null;default:1" json:"audio_config_version"`
 	OCRModel           string `gorm:"size:64;not null;default:'local-paddleocr'" json:"ocr_model"`
+	TranslationModel   string `gorm:"size:96;not null;default:'qwen3.7-flash'" json:"translation_model"`
 	TTSModel           string `gorm:"size:64;not null;default:'local-qwen3-tts'" json:"tts_model"`
 	TTSVoice           string `gorm:"size:100;not null;default:'aiden'" json:"tts_voice"`
 	// SourcePageCount is the number of pages in the uploaded PDF.  It keeps
@@ -128,25 +130,51 @@ type TextbookDraft struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 type TextbookDraftPage struct {
-	ID           uint64 `gorm:"primaryKey" json:"id"`
-	DraftID      string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
-	Position     int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
-	PrintedPage  *int   `json:"printed_page"`
-	Title        string `gorm:"size:255;not null" json:"title"`
-	Unit         string `gorm:"size:255;not null" json:"unit"`
-	ImagePath    string `gorm:"size:500;not null" json:"-"`
-	Content      string `gorm:"type:json;not null" json:"content"`
-	Preview      bool   `gorm:"not null;default:false" json:"preview"`
-	Checked      bool   `gorm:"not null;default:false" json:"checked"`
-	AudioChecked bool   `gorm:"not null;default:false" json:"audio_checked"`
+	ID             uint64 `gorm:"primaryKey" json:"id"`
+	DraftID        string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
+	Position       int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
+	PrintedPage    *int   `json:"printed_page"`
+	Title          string `gorm:"size:255;not null" json:"title"`
+	Unit           string `gorm:"size:255;not null" json:"unit"`
+	ImagePath      string `gorm:"size:500;not null" json:"-"`
+	Content        string `gorm:"type:json;not null" json:"content"`
+	Preview        bool   `gorm:"not null;default:false" json:"preview"`
+	Checked        bool   `gorm:"not null;default:false" json:"checked"`
+	AudioChecked   bool   `gorm:"not null;default:false" json:"audio_checked"`
+	InheritedAudio bool   `gorm:"not null;default:false" json:"inherited_audio"`
 	// Model fields are page snapshots. A fully reviewed page keeps these values
 	// even when the draft default changes for later/unreviewed pages.
-	OCRModel  string    `gorm:"size:64;not null;default:''" json:"ocr_model"`
-	TTSModel  string    `gorm:"size:64;not null;default:''" json:"tts_model"`
-	TTSVoice  string    `gorm:"size:100;not null;default:''" json:"tts_voice"`
-	Version   uint64    `gorm:"not null;default:1" json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	OCRModel         string    `gorm:"size:64;not null;default:''" json:"ocr_model"`
+	TranslationModel string    `gorm:"size:96;not null;default:''" json:"translation_model"`
+	TTSModel         string    `gorm:"size:64;not null;default:''" json:"tts_model"`
+	TTSVoice         string    `gorm:"size:100;not null;default:''" json:"tts_voice"`
+	Version          uint64    `gorm:"not null;default:1" json:"version"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
+type TextbookTranslationItem struct {
+	ID                uint64     `gorm:"primaryKey" json:"id"`
+	DraftID           string     `gorm:"size:36;not null;uniqueIndex:uk_translation_item,priority:1;index:idx_translation_page,priority:1;index:idx_translation_segment,priority:1;index:idx_translation_status,priority:1;index:idx_translation_type,priority:1" json:"draft_id"`
+	Page              uint32     `gorm:"type:int unsigned;not null;default:0;uniqueIndex:uk_translation_item,priority:2;index:idx_translation_page,priority:2;index:idx_translation_segment,priority:2;index:idx_translation_status,priority:2;index:idx_translation_type,priority:2" json:"page"`
+	ItemID            string     `gorm:"size:191;not null;default:'';uniqueIndex:uk_translation_item,priority:3" json:"item_id"`
+	SegmentID         string     `gorm:"size:191;not null;default:'';index:idx_translation_segment,priority:3" json:"segment_id"`
+	ItemType          string     `gorm:"size:16;not null;default:'';index:idx_translation_type,priority:3;index:idx_translation_library,priority:1" json:"item_type"`
+	WordIndex         uint32     `gorm:"type:int unsigned;not null;default:0" json:"word_index"`
+	SourceText        string     `gorm:"size:500;not null;index:idx_translation_library,priority:3" json:"source_text"`
+	Translation       *string    `gorm:"type:text" json:"translation,omitempty"`
+	Meaning           string     `gorm:"size:100;not null;default:''" json:"meaning"`
+	Phonetic          string     `gorm:"size:191;not null;default:''" json:"phonetic"`
+	TranslationModel  string     `gorm:"size:96;not null;default:''" json:"translation_model"`
+	Provider          string     `gorm:"size:32;not null;default:''" json:"provider"`
+	Status            string     `gorm:"size:32;not null;default:'pending';index:idx_translation_status,priority:3;index:idx_translation_library,priority:2" json:"status"`
+	FailureReason     *string    `gorm:"type:text" json:"failure_reason,omitempty"`
+	SourcePageVersion uint64     `gorm:"not null;default:1" json:"source_page_version"`
+	Revision          uint64     `gorm:"not null;default:1" json:"revision"`
+	ReviewedBy        uint64     `gorm:"not null;default:0" json:"reviewed_by"`
+	ReviewedAt        *time.Time `json:"reviewed_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type TextbookJob struct {
 	ID      uint64 `gorm:"primaryKey" json:"id"`
 	DraftID string `gorm:"size:36;not null;index" json:"draft_id"`

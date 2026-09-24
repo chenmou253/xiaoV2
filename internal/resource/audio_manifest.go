@@ -184,20 +184,47 @@ func AudioItemFileInDir(dir string, page int, itemID, accent string) (string, er
 		if item.Page != page || item.ItemID != itemID || item.Accent != accent || item.File == "" {
 			continue
 		}
-		target := filepath.Join(dir, filepath.FromSlash(item.File))
-		absoluteDir, dirErr := filepath.Abs(dir)
-		absoluteTarget, targetErr := filepath.Abs(filepath.Clean(target))
-		if dirErr != nil || targetErr != nil {
-			return "", os.ErrNotExist
+		return audioManifestFile(dir, item.File)
+	}
+	return "", os.ErrNotExist
+}
+
+func AudioAccentsInDir(dir string) []string {
+	manifest, err := readAudioManifest(dir)
+	if err != nil {
+		return nil
+	}
+	found := map[string]bool{}
+	for _, item := range manifest.Items {
+		if (item.Accent != "en-US" && item.Accent != "en-GB") || item.Page < 1 || item.ItemID == "" || item.File == "" {
+			continue
 		}
-		relative, relErr := filepath.Rel(absoluteDir, absoluteTarget)
-		if relErr != nil || relative == ".." || filepath.IsAbs(relative) || (len(relative) > 3 && relative[:3] == ".."+string(filepath.Separator)) {
-			return "", errors.New("audio manifest path escapes tts directory")
+		if _, err := audioManifestFile(dir, item.File); err == nil {
+			found[item.Accent] = true
 		}
-		if info, statErr := os.Stat(absoluteTarget); statErr == nil && info.Mode().IsRegular() {
-			return absoluteTarget, nil
+	}
+	result := make([]string, 0, len(found))
+	for _, accent := range []string{"en-US", "en-GB"} {
+		if found[accent] {
+			result = append(result, accent)
 		}
+	}
+	return result
+}
+
+func audioManifestFile(dir, file string) (string, error) {
+	target := filepath.Join(dir, filepath.FromSlash(file))
+	absoluteDir, dirErr := filepath.Abs(dir)
+	absoluteTarget, targetErr := filepath.Abs(filepath.Clean(target))
+	if dirErr != nil || targetErr != nil {
 		return "", os.ErrNotExist
+	}
+	relative, relErr := filepath.Rel(absoluteDir, absoluteTarget)
+	if relErr != nil || relative == ".." || filepath.IsAbs(relative) || (len(relative) > 3 && relative[:3] == ".."+string(filepath.Separator)) {
+		return "", errors.New("audio manifest path escapes tts directory")
+	}
+	if info, statErr := os.Stat(absoluteTarget); statErr == nil && info.Mode().IsRegular() {
+		return absoluteTarget, nil
 	}
 	return "", os.ErrNotExist
 }
@@ -213,4 +240,24 @@ func (m *Manager) AudioItemFile(bookID string, page int, itemID, accent string) 
 		}
 	}
 	return "", os.ErrNotExist
+}
+
+func (m *Manager) AudioAccents(bookID string) []string {
+	found := map[string]bool{}
+	for _, kind := range []string{"tts", "audio"} {
+		dir, err := m.Dir(bookID, kind)
+		if err != nil {
+			continue
+		}
+		for _, accent := range AudioAccentsInDir(dir) {
+			found[accent] = true
+		}
+	}
+	result := make([]string, 0, len(found))
+	for _, accent := range []string{"en-US", "en-GB"} {
+		if found[accent] {
+			result = append(result, accent)
+		}
+	}
+	return result
 }

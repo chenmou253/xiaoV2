@@ -2,12 +2,15 @@ package ai
 
 import (
 	"os"
+	"runtime"
 	"strings"
 )
 
 const (
 	LocalOCRModel = "local-paddleocr"
 	CloudOCRModel = "qwen3.5-ocr"
+	LocalTranslationModel = "local-qwen3-4b-instruct-2507"
+	CloudTranslationModel = "qwen3.7-flash"
 	LocalTTSModel    = "local-qwen3-tts"
 	LocalTTS17BModel = "local-qwen3-tts-1.7b"
 	CloudTTSModel    = "qwen3-tts-flash"
@@ -34,13 +37,14 @@ type Voice struct {
 }
 
 type Settings struct {
-	OCRModel string `json:"ocr_model"`
-	TTSModel string `json:"tts_model"`
-	TTSVoice string `json:"tts_voice"`
+	OCRModel         string `json:"ocr_model"`
+	TranslationModel string `json:"translation_model"`
+	TTSModel         string `json:"tts_model"`
+	TTSVoice         string `json:"tts_voice"`
 }
 
 func DefaultSettings() Settings {
-	return Settings{OCRModel: LocalOCRModel, TTSModel: LocalTTSModel, TTSVoice: "aiden"}
+	return Settings{OCRModel: LocalOCRModel, TranslationModel: CloudTranslationModel, TTSModel: LocalTTSModel, TTSVoice: "aiden"}
 }
 
 func Models() []Model {
@@ -49,9 +53,21 @@ func Models() []Model {
 	if !hasKey {
 		cloudReason = "未配置 DASHSCOPE_API_KEY"
 	}
+	hasTranslationKey := strings.TrimSpace(os.Getenv("TRANSLATION_API_KEY")) != "" || hasKey
+	translationCloudReason := ""
+	if !hasTranslationKey {
+		translationCloudReason = "未配置 TRANSLATION_API_KEY 或 DASHSCOPE_API_KEY"
+	}
+	localTranslationAvailable := runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+	localTranslationReason := ""
+	if !localTranslationAvailable {
+		localTranslationReason = "本地 MLX 翻译仅支持 Apple Silicon macOS"
+	}
 	return []Model{
 		{ID: LocalOCRModel, Name: "本地 PaddleOCR", Type: "ocr", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"text", "coordinates", "confidence"}, RetryPolicy: "local-quality-gate"},
 		{ID: CloudOCRModel, Name: "Qwen3.5 OCR", Type: "ocr", Provider: "dashscope", Enabled: true, Cloud: true, Available: hasKey, UnavailableReason: cloudReason, Capabilities: []string{"text", "coordinates", "document-ocr"}, RetryPolicy: "none"},
+		{ID: LocalTranslationModel, Name: "本地 Qwen3-4B-Instruct-2507 4bit", Type: "translation", Provider: "local-mlx", Enabled: true, Available: localTranslationAvailable, UnavailableReason: localTranslationReason, Capabilities: []string{"translation", "contextual-word-meaning", "spelling-review", "general-american-ipa", "structured-json"}, RetryPolicy: "none"},
+		{ID: CloudTranslationModel, Name: "Qwen3.7 Flash", Type: "translation", Provider: "dashscope", Enabled: true, Cloud: true, Available: hasTranslationKey, UnavailableReason: translationCloudReason, Capabilities: []string{"translation", "contextual-word-meaning", "spelling-review", "general-american-ipa", "structured-json"}, RetryPolicy: "none"},
 		{ID: LocalTTSModel, Name: "本地 Qwen3 TTS 0.6B 8bit", Type: "tts", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"speech", "en-US", "en-GB", "local-qa"}, DefaultVoice: "aiden", RetryPolicy: "local-quality-gate"},
 		{ID: LocalTTS17BModel, Name: "本地 Qwen3 TTS 1.7B 8bit", Type: "tts", Provider: "local", Enabled: true, Available: true, Capabilities: []string{"speech", "en-US", "en-GB", "local-qa"}, DefaultVoice: "aiden", RetryPolicy: "local-quality-gate"},
 		{ID: CloudTTSModel, Name: "Qwen3 TTS Flash", Type: "tts", Provider: "dashscope", Enabled: true, Cloud: true, Available: hasKey, UnavailableReason: cloudReason, Capabilities: []string{"speech", "multilingual", "local-qa"}, DefaultVoice: "Aiden", RetryPolicy: "none"},
@@ -75,6 +91,11 @@ func IsCloud(id string) bool {
 func IsLocalTTS(id string) bool {
 	item, ok := Find(id)
 	return ok && item.Type == "tts" && item.Provider == "local" && !item.Cloud
+}
+
+func IsLocalTranslation(id string) bool {
+	item, ok := Find(id)
+	return ok && item.Type == "translation" && item.Provider == "local-mlx" && !item.Cloud
 }
 
 func Voices(modelID string) []Voice {
@@ -109,6 +130,9 @@ func NormalizeSettings(value Settings) Settings {
 	defaults := DefaultSettings()
 	if value.OCRModel == "" {
 		value.OCRModel = defaults.OCRModel
+	}
+	if value.TranslationModel == "" {
+		value.TranslationModel = defaults.TranslationModel
 	}
 	if value.TTSModel == "" {
 		value.TTSModel = defaults.TTSModel

@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
-	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -304,34 +304,35 @@ func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page
 			return err
 		}
 		if err := tx.Model(&audioItem).Updates(map[string]any{
-			"segment_id": contentItem.SegmentID,
-			"item_type": contentItem.Kind,
-			"word_index": contentItem.WordIndex,
-			"text": contentItem.Text,
-			"context": contentItem.Context,
-			"model_id": selected.ID,
-			"provider": selected.Provider,
-			"voice_id": voiceID,
-			"status": "queued",
-			"active_job_id": job.ID,
-			"candidate_path": "",
+			"segment_id":      contentItem.SegmentID,
+			"item_type":       contentItem.Kind,
+			"word_index":      contentItem.WordIndex,
+			"text":            contentItem.Text,
+			"context":         contentItem.Context,
+			"model_id":        selected.ID,
+			"provider":        selected.Provider,
+			"voice_id":        voiceID,
+			"status":          "queued",
+			"active_job_id":   job.ID,
+			"candidate_path":  "",
 			"failure_reasons": "[]",
-			"qa_score": nil,
-			"reviewed_by": nil,
-			"reviewed_at": nil,
-			"revision": gorm.Expr("revision+1"),
+			"qa_score":        nil,
+			"reviewed_by":     nil,
+			"reviewed_at":     nil,
+			"revision":        gorm.Expr("revision+1"),
 		}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&draftPage).Updates(map[string]any{
-			"audio_checked": false,
-			"version": gorm.Expr("version+1"),
+			"audio_checked":   false,
+			"inherited_audio": false,
+			"version":         gorm.Expr("version+1"),
 		}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&draft).Updates(map[string]any{
-			"status": "draft",
-			"version": gorm.Expr("version+1"),
+			"status":     "draft",
+			"version":    gorm.Expr("version+1"),
 			"updated_by": actor,
 		}).Error; err != nil {
 			return err
@@ -393,7 +394,7 @@ func (s *EditorService) RetryAudioIssue(ctx context.Context, id string, page int
 		if err := tx.Model(&audioItem).Updates(map[string]any{"status": "queued", "active_job_id": job.ID, "model_id": selected.ID, "provider": selected.Provider, "voice_id": voiceID, "revision": gorm.Expr("revision+1")}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, page).Update("audio_checked", false).Error; err != nil {
+		if err := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, page).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&draft).Updates(map[string]any{"status": "draft", "version": gorm.Expr("version+1"), "updated_by": actor}).Error; err != nil {
@@ -559,7 +560,7 @@ func (s *EditorService) ApproveAudioIssue(ctx context.Context, id string, page i
 		if result.RowsAffected != 1 {
 			return conflict("该音频状态已经变化，请刷新后重试")
 		}
-		if err := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, page).Update("audio_checked", false).Error; err != nil {
+		if err := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, page).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&model.TextbookDraft{}).Where("id=?", id).Updates(map[string]any{"status": "draft", "version": gorm.Expr("version+1"), "updated_by": actor}).Error; err != nil {

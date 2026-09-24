@@ -5,6 +5,14 @@ import types
 import unittest
 from unittest import mock
 
+from translation_daemon import (
+    LocalItemValidationError,
+    normalize_word_text,
+    parse_sentence_result,
+    parse_word_result,
+    word_user_prompt,
+)
+
 from translate_page import (
     BATCH_REVIEW_SCHEMA,
     BATCH_TRANSLATION_SCHEMA,
@@ -53,6 +61,39 @@ def approved(translation, score=0.98):
 
 
 class TranslationTests(unittest.TestCase):
+    def test_local_daemon_sentence_result_is_plain_text_not_json(self):
+        self.assertEqual(parse_sentence_result("我看见一家医院。"), "我看见一家医院。")
+        with self.assertRaises(LocalItemValidationError):
+            parse_sentence_result("翻译：\n我看见一家医院。")
+
+    def test_local_daemon_word_result_requires_exactly_two_lines(self):
+        meaning, phonetic = parse_word_result("医院\n/ˈhɑːspɪtl/", "hospital")
+        self.assertEqual(meaning, "医院")
+        self.assertEqual(phonetic, "ˈhɑːspɪtl")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("医院", "hospital")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("医院\nhospital", "hospital")
+
+    def test_local_daemon_removes_punctuation_before_word_request(self):
+        self.assertEqual(normalize_word_text("hello,"), "hello")
+        self.assertEqual(normalize_word_text("“hospital.”"), "hospital")
+        self.assertEqual(word_user_prompt("listen!"), "listen")
+
+    def test_local_daemon_rejects_sentence_translation_as_word_meaning(self):
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("这些礼物是给你的。\nfɔːr", "for")
+        self.assertEqual(parse_word_result("给\nfɔːr", "for"), ("给", "fɔːr"))
+
+    def test_local_daemon_rejects_non_ipa_word_phonetics(self):
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nr'listen", "listen")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nr:listen", "listen")
+        with self.assertRaises(LocalItemValidationError):
+            parse_word_result("听\nlisten", "listen")
+        self.assertEqual(parse_word_result("听\nˈlɪsən", "listen"), ("听", "ˈlɪsən"))
+
     def test_translation_completion_budget_defaults_to_qwen_max_and_is_configurable(self):
         from translate_page import configured_translation_completion_tokens
 
@@ -411,7 +452,7 @@ class TranslationTests(unittest.TestCase):
         )
         self.assertEqual(result.translation, "我喜欢苹果。")
         self.assertEqual(result.review, "WARNING")
-        self.assertIn("CONTEXT:\nI like apples.", backend.calls[0][1])
+        self.assertNotIn("CONTEXT:", backend.calls[0][1])
         self.assertIs(backend.calls[1][0], REVIEWER_SYSTEM_PROMPT)
 
     def test_word_translation_is_scoped_to_sentence(self):
@@ -424,6 +465,7 @@ class TranslationTests(unittest.TestCase):
             sentence="We sat on the river bank.",
         )
         self.assertEqual(result.translation, "河岸")
+        self.assertNotIn("CONTEXT:", backend.calls[0][1])
         self.assertIn("TARGET SENTENCE:\nWe sat on the river bank.", backend.calls[0][1])
         self.assertIn("TARGET WORD:\nbank", backend.calls[0][1])
 
@@ -611,5 +653,406 @@ class TranslationTests(unittest.TestCase):
         )
 
 
+
+    def test_local_prompt_does_not_expose_ids(self):
+        from translate_page import local_translation_prompt
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello world.",
+            "target_text": "Hello world.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Hello", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
+            ],
+        }]
+        prompt = local_translation_prompt(items)
+        self.assertNotIn("p54-s0", prompt)
+        self.assertNotIn("p54-s0-w0", prompt)
+        self.assertIn("Hello world.", prompt)
+        self.assertIn('"text":"Hello"', prompt)
+
+    def test_local_candidate_validation_helpers(self):
+        from translate_page import expected_for_items, validate_complete_candidates
+
+        items = [{
+            "id": "s0",
+            "target_text": "Hello",
+            "context": "",
+            "words": [{"id": "w0", "text": "Hello", "phonetic": ""}],
+        }]
+        expected = expected_for_items(items)
+        candidates = {
+            "s0": {
+                "translation": "你好",
+                "words": {"w0": {"meaning": "你好", "phonetic": "həˈloʊ"}},
+            }
+        }
+        validate_complete_candidates(candidates, expected)
+        self.assertEqual(expected, {"s0": {"w0"}})
+
+    def test_local_translation_batches_are_fixed_at_one_segment(self):
+        from translate_page import _local_item_batches
+
+        items = [{"id": f"s{index}", "target_text": str(index), "context": "", "words": []}
+                 for index in range(7)]
+        batches = _local_item_batches(items)
+        self.assertEqual([len(batch) for batch in batches], [1, 1, 1, 1, 1, 1, 1])
+        self.assertEqual(
+            [[item["id"] for item in batch] for batch in batches],
+            [["s0"], ["s1"], ["s2"], ["s3"], ["s4"], ["s5"], ["s6"]],
+        )
+
+    def test_local_translation_prompt_sends_no_context(self):
+        from translate_page import local_translation_prompt
+
+        items = [
+            {
+                "id": "s0",
+                "context": "ignored repeated page context",
+                "target_text": "First sentence.",
+                "words": [{"id": "w0", "text": "First", "phonetic": ""}],
+            },
+            {
+                "id": "s1",
+                "context": "ignored repeated page context",
+                "target_text": "Second sentence.",
+                "words": [{"id": "w1", "text": "Second", "phonetic": ""}],
+            },
+        ]
+        prompt = local_translation_prompt(items)
+        source_payload = prompt.split("SOURCE INPUT:\n", 1)[1].split("\n\nOUTPUT TEMPLATE:", 1)[0]
+        payload = json.loads(source_payload)
+        self.assertNotIn("context", payload)
+        self.assertNotIn("context", payload["items"][0])
+        self.assertNotIn("context", payload["items"][1])
+        self.assertEqual(payload["items"][0]["target_text"], "First sentence.")
+        self.assertEqual(payload["items"][1]["target_text"], "Second sentence.")
+
+    def test_local_translation_maps_results_back_by_position(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello world.",
+            "target_text": "Hello world.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Hello", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
+            ],
+        }]
+        raw = json.dumps(
+            {
+                "segments": [{
+                    "translation": "你好，世界。",
+                    "words": [
+                        {"meaning": "你好", "phonetic": "həˈloʊ"},
+                        {"meaning": "世界", "phonetic": "wɝːld"},
+                    ],
+                }]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["translation"], "你好，世界。")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "世界")
+
+    def test_local_translation_prompt_contains_exact_output_skeleton(self):
+        from translate_page import local_translation_prompt
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Listen and repeat.",
+            "target_text": "Listen and repeat.",
+            "words": [
+                {"id": "w0", "text": "Listen", "phonetic": ""},
+                {"id": "w1", "text": "and", "phonetic": ""},
+                {"id": "w2", "text": "repeat", "phonetic": ""},
+            ],
+        }]
+        prompt = local_translation_prompt(items)
+        self.assertIn("OUTPUT TEMPLATE:", prompt)
+        template_text = prompt.split("OUTPUT TEMPLATE:\n", 1)[1]
+        template = json.loads(template_text)
+        self.assertEqual(len(template["segments"]), 1)
+        self.assertEqual(len(template["segments"][0]["words"]), 3)
+        self.assertEqual(
+            template["segments"][0]["words"],
+            [
+                {"meaning": "", "phonetic": ""},
+                {"meaning": "", "phonetic": ""},
+                {"meaning": "", "phonetic": ""},
+            ],
+        )
+
+    def test_local_translation_rejects_prose_wrapped_or_inner_json(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello.",
+            "target_text": "Hello.",
+            "words": [{"id": "w0", "text": "Hello", "phonetic": ""}],
+        }]
+        raw = 'prefix {"segments":[{"translation":"你好","words":[{"meaning":"你好","phonetic":"həˈloʊ"}]}]} suffix'
+        with self.assertRaises(json.JSONDecodeError):
+            parse_local_translation(raw, items)
+
+    def test_local_translation_accepts_empty_word_placeholders(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello world.",
+            "target_text": "Hello world.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Hello", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
+            ],
+        }]
+        raw = json.dumps(
+            {
+                "segments": [{
+                    "translation": "你好，世界。",
+                    "words": [
+                        {"meaning": "你好", "phonetic": "həˈloʊ"},
+                        {"meaning": "", "phonetic": ""},
+                    ],
+                }]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_local_translation(raw, items)
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w0"]["meaning"], "你好")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["meaning"], "")
+        self.assertEqual(parsed["p54-s0"]["words"]["p54-s0-w1"]["phonetic"], "")
+
+    def test_local_translation_rejects_position_count_mismatch(self):
+        from translate_page import parse_local_translation
+
+        items = [{
+            "id": "p54-s0",
+            "context": "Hello world.",
+            "target_text": "Hello world.",
+            "words": [
+                {"id": "p54-s0-w0", "text": "Hello", "phonetic": ""},
+                {"id": "p54-s0-w1", "text": "world", "phonetic": ""},
+            ],
+        }]
+        raw = json.dumps(
+            {
+                "segments": [{
+                    "translation": "你好，世界。",
+                    "words": [{"meaning": "你好", "phonetic": "həˈloʊ"}],
+                }]
+            },
+            ensure_ascii=False,
+        )
+        with self.assertRaisesRegex(ValueError, "word count mismatch"):
+            parse_local_translation(raw, items)
+
+    def test_local_review_uses_indexes_not_ids(self):
+        from translate_page import local_review_prompt, parse_local_review
+
+        items = [{
+            "id": "p54-s0",
+            "context": "I like apples.",
+            "target_text": "I like apples.",
+            "words": [{"id": "p54-s0-w0", "text": "apples", "phonetic": ""}],
+        }]
+        candidates = {
+            "p54-s0": {
+                "translation": "我喜欢苹果。",
+                "words": {"p54-s0-w0": {"meaning": "苹果", "phonetic": "ˈæpəlz"}},
+            }
+        }
+        prompt = local_review_prompt(items, candidates)
+        self.assertNotIn("p54-s0", prompt)
+        raw = json.dumps(
+            {
+                "issues": [{
+                    "segment_index": 0,
+                    "word_index": 0,
+                    "field": "meaning",
+                    "reason": "词义需更准确",
+                    "suggestion": "苹果（复数）",
+                }]
+            },
+            ensure_ascii=False,
+        )
+        reviewed = parse_local_review(raw, items, candidates)
+        self.assertEqual(
+            reviewed["p54-s0"]["words"]["p54-s0-w0"]["meaning"],
+            "苹果（复数）",
+        )
+
+    def test_local_structured_call_retries_malformed_json_once(self):
+        from translate_page import (
+            LOCAL_TRANSLATION_SCHEMA,
+            LocalMLXBackend,
+            _local_structured_call,
+        )
+
+        backend = object.__new__(LocalMLXBackend)
+        backend.model = "local-qwen3-4b-instruct-2507"
+        backend.operation_label = "本地翻译"
+        backend.request_type = "page_translation"
+        backend.page_number = 7
+        backend.attempt = 1
+        backend.status_callback = None
+        responses = iter([
+            '{"segments":[{"translation":"你好" "words":[]}]}',
+            '{"segments":[{"translation":"你好","words":[]}]}',
+        ])
+
+        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
+            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+            return next(responses)
+
+        backend.generate_structured = generate_structured
+        calls = {"count": 0}
+
+        def parser(raw):
+            calls["count"] += 1
+            return json.loads(raw)
+
+        result = _local_structured_call(
+            backend,
+            "system",
+            "prompt",
+            kind="page_translation",
+            page=7,
+            parser=parser,
+            schema=LOCAL_TRANSLATION_SCHEMA,
+            max_completion_tokens=512,
+        )
+        self.assertEqual(result["segments"][0]["translation"], "你好")
+        self.assertEqual(calls["count"], 2)
+
+    def test_local_structured_call_stops_after_second_json_failure(self):
+        from translate_page import (
+            LOCAL_TRANSLATION_SCHEMA,
+            LocalMLXBackend,
+            _local_structured_call,
+        )
+
+        backend = object.__new__(LocalMLXBackend)
+        backend.model = "local-qwen3-4b-instruct-2507"
+        backend.operation_label = "本地翻译"
+        backend.request_type = "page_translation"
+        backend.page_number = 7
+        backend.attempt = 1
+        backend.status_callback = None
+        calls = {"count": 0}
+
+        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
+            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+            calls["count"] += 1
+            return '{"segments":[{"translation":"坏掉" "words":[]}]}'
+
+        backend.generate_structured = generate_structured
+        with self.assertRaises(json.JSONDecodeError):
+            _local_structured_call(
+                backend,
+                "system",
+                "prompt",
+                kind="page_translation",
+                page=7,
+                parser=json.loads,
+                schema=LOCAL_TRANSLATION_SCHEMA,
+                max_completion_tokens=512,
+            )
+        self.assertEqual(calls["count"], 2)
+
+    def test_local_structured_call_retries_structure_mismatch_once_without_splitting(self):
+        from translate_page import (
+            LOCAL_TRANSLATION_SCHEMA,
+            LocalMLXBackend,
+            LocalStructureError,
+            _local_structured_call,
+        )
+
+        backend = object.__new__(LocalMLXBackend)
+        backend.model = "local-qwen3-4b-instruct-2507"
+        backend.operation_label = "本地翻译"
+        backend.request_type = "page_translation"
+        backend.page_number = 7
+        backend.attempt = 1
+        backend.status_callback = None
+        calls = {"count": 0}
+
+        def generate_structured(system_prompt, user_prompt, max_completion_tokens, *, schema_name, schema):
+            del system_prompt, user_prompt, max_completion_tokens, schema_name, schema
+            calls["count"] += 1
+            return '{"segments":[]}'
+
+        backend.generate_structured = generate_structured
+        with self.assertRaisesRegex(LocalStructureError, "count mismatch"):
+            _local_structured_call(
+                backend,
+                "system",
+                "prompt",
+                kind="page_translation",
+                page=7,
+                parser=lambda raw: (_ for _ in ()).throw(LocalStructureError("count mismatch")),
+                schema=LOCAL_TRANSLATION_SCHEMA,
+                max_completion_tokens=512,
+            )
+        self.assertEqual(calls["count"], 2)
+
+
+    def test_batch_translation_accepts_leading_zero_id_variants(self):
+        from translate_page import parse_batch_translation
+
+        expected = {"p53-s12": {"p53-s12-w2"}}
+        raw = json.dumps(
+            {
+                "segments": [
+                    {
+                        "id": "p053-s012",
+                        "translation": "电话",
+                        "words": [
+                            {
+                                "id": "p053-s012-w002",
+                                "meaning": "电话",
+                                "phonetic": "foʊn",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_batch_translation(raw, expected)
+        self.assertIn("p53-s12", parsed)
+        self.assertIn("p53-s12-w2", parsed["p53-s12"]["words"])
+
+    def test_batch_translation_rejects_real_id_change(self):
+        from translate_page import parse_batch_translation
+
+        expected = {"p53-s12": {"p53-s12-w2"}}
+        raw = json.dumps(
+            {
+                "segments": [
+                    {
+                        "id": "p53-s12",
+                        "translation": "电话",
+                        "words": [
+                            {
+                                "id": "p53-s12-w3",
+                                "meaning": "电话",
+                                "phonetic": "foʊn",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with self.assertRaises(ValueError):
+            parse_batch_translation(raw, expected)
+
 if __name__ == "__main__":
     unittest.main()
+

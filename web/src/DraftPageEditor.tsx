@@ -29,6 +29,7 @@ const CLICK_MOVE_THRESHOLD = 0.01;
 const uid = () => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 const audioMode = (segment: Segment): AudioMode => segment.audio_mode || "sentence_and_words";
 const hasSpellingErrorHint = (word: Word) => /拼写(?:错误|有误)/.test(word.meaning || "");
+const hasTranslationReviewWarning = (item: { translation_status?: string }) => item.translation_status === "review_warning";
 const anchorWithSize = (anchor?: Anchor): [number, number, number, number] => anchor?.length === 4 ? [...anchor] : [anchor?.[0] ?? 0.45, anchor?.[1] ?? 0.45, 0.03, 0.03];
 const boundedAnchor = (anchor?: Anchor): [number, number, number, number] => {
   const [x, y, width, height] = anchorWithSize(anchor);
@@ -66,6 +67,16 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       hasSpellingErrorHint(current) ? [{ segmentIndex, wordIndex, word: current }] : [],
     ),
   );
+  const translationReviewItems = segments.flatMap((item, segmentIndex) => [
+    ...(hasTranslationReviewWarning(item)
+      ? [{ kind: "sentence" as const, segmentIndex, wordIndex: -1, text: item.text, reason: item.translation_failure_reason || "本地 Review 未通过" }]
+      : []),
+    ...item.words.flatMap((current, wordIndex) =>
+      hasTranslationReviewWarning(current)
+        ? [{ kind: "word" as const, segmentIndex, wordIndex, text: current.text, reason: current.translation_failure_reason || "本地 Review 未通过" }]
+        : [],
+    ),
+  ]);
 
   function setSegments(next: Segment[]) { onChange({ ...content, segments: next }); }
   function updateSegment(index: number, patch: Partial<Segment>) {
@@ -280,6 +291,13 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
 
   return <div className="visual-editor">
     <div className="action-row"><button type="button" onClick={() => setZoom(!zoom)}>{zoom ? "适应宽度" : "放大原图"}</button>{availableAccents.length > 1 && <label className="editor-accent-select">试听口音<select value={activeAccent} onChange={(e) => { stop(); setAudioError(""); setAccent(e.target.value as Accent); }}><option value="en-US">美式</option><option value="en-GB">英式</option></select></label>}{playing && <span className="editor-playing">正在播放，点击当前热区停止</span>}{audioError && <span className="editor-audio-error">{audioError}</span>}</div>
+    {translationReviewItems.length > 0 && <section className="translation-review-alert" role="alert" aria-live="polite">
+      <strong>本地 Review 拦截 {translationReviewItems.length} 项，请人工核对：</strong>
+      <div>{translationReviewItems.map((current) => <button type="button" key={`${current.kind}:${segments[current.segmentIndex].id}:${current.wordIndex}`} onClick={() => { setSI(current.segmentIndex); setWI(Math.max(0, current.wordIndex)); }}>
+        {current.kind === "sentence" ? "整句" : "单词"} · {current.text || "空内容"}
+        <small>{current.reason}</small>
+      </button>)}</div>
+    </section>}
     {spellingErrorWords.length > 0 && <section className="translation-spelling-alert" role="alert" aria-live="polite">
       <strong>翻译模型提示 {spellingErrorWords.length} 个单词可能存在拼写错误，请逐个核对：</strong>
       <div>{spellingErrorWords.map(({ segmentIndex, wordIndex, word: current }) => <button type="button" key={`${segments[segmentIndex].id}:${current.id}`} onClick={() => { setSI(segmentIndex); setWI(wordIndex); }}>{current.text || "空单词"} <small>{current.meaning}</small></button>)}</div>
@@ -337,7 +355,8 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       {audioMode(segment) === "word_only" && <p className="editor-audio-mode-note">本片段只生成单词点读，不生成整句音频。</p>}
       {audioMode(segment) === "none" && <p className="editor-audio-mode-note">本片段不生成整句或单词音频。</p>}
       <label>片段英文（可直接编辑）<textarea rows={3} value={segment.text} onChange={(e) => updateSegment(si, { text: e.target.value })} /></label>
-      <label>整句翻译<textarea value={segment.translation || ""} onChange={(e) => updateSegment(si, { translation: e.target.value })} /></label>
+      <label>整句翻译<textarea className={hasTranslationReviewWarning(segment) ? "translation-review-input" : ""} value={segment.translation || ""} onChange={(e) => updateSegment(si, { translation: e.target.value })} /></label>
+      {hasTranslationReviewWarning(segment) && <p className="translation-review-warning"><strong>⚠ 本地 Review 未通过</strong>：{segment.translation_failure_reason || "请人工核对整句翻译。"}</p>}
       {(onRegenerateAudio || onUploadAudio) && audioMode(segment) === "sentence_and_words" && segment.text.trim() && <div className="editor-audio-regenerate">
         <span>整句音频</span>
         {onRegenerateAudio && availableAccents.map((itemAccent) => {
@@ -368,7 +387,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
           const dropBefore = wordDropIndex === index, dropAfter = wordDropIndex === segment.words.length && index === segment.words.length - 1;
           return <span className={`editor-word-chip${draggedWord?.wordID === current.id ? " dragging" : ""}${dropBefore ? " drop-before" : ""}${dropAfter ? " drop-after" : ""}`} draggable={editable} key={current.id} onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", current.id); setDraggedWord({ segmentID: segment.id, wordID: current.id }); setWordDropIndex(index); }} onDragOver={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; setWordDropIndex(wordDropPosition(e, index)); }} onDrop={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.stopPropagation(); reorderWord(si, wordDropPosition(e, index)); finishWordDrag(); }} onDragEnd={finishWordDrag} title="拖拽调整单词顺序">
             <span className="editor-word-drag-handle" aria-hidden="true">⠿</span>
-            <button type="button" className={`${index === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${hasSpellingErrorHint(current) ? "translation-spelling-review" : ""}`} onClick={() => setWI(index)}>{current.text || "新单词"}{hasSpellingErrorHint(current) ? " ⚠" : ""}</button>
+            <button type="button" className={`${index === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review " : ""}${hasSpellingErrorHint(current) ? "translation-spelling-review " : ""}${hasTranslationReviewWarning(current) ? "translation-review-item" : ""}`} onClick={() => setWI(index)}>{current.text || "新单词"}{hasSpellingErrorHint(current) || hasTranslationReviewWarning(current) ? " ⚠" : ""}</button>
           </span>;
         })}
         <button type="button" className="editor-add-word" onDragOver={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); setWordDropIndex(segment.words.length); }} onDrop={(e) => { if (!draggedWord || draggedWord.segmentID !== segment.id) return; e.preventDefault(); e.stopPropagation(); reorderWord(si, segment.words.length); finishWordDrag(); }} onClick={addSelectedWord}>＋单词</button>
@@ -376,6 +395,7 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       <p className="editor-words-help">点击“＋单词”会插入到当前单词后；拖拽单词左侧标记可调整顺序。</p>
       {word && <>
         {typeof word.ocr_confidence === "number" && <p className={word.ocr_needs_review ? "ocr-confidence review" : "ocr-confidence"}>PaddleOCR 置信度：{Math.round(word.ocr_confidence * 100)}%{word.ocr_needs_review ? " · 建议人工核对" : ""}</p>}
+        {hasTranslationReviewWarning(word) && <p className="translation-review-warning"><strong>⚠ 本地 Review 未通过</strong>：{word.translation_failure_reason || "请人工核对词义和音标。"}</p>}
         {hasSpellingErrorHint(word) && <p className="translation-spelling-word-warning"><strong>⚠ 翻译模型提示拼写错误</strong>：请核对英文、词义和音标。当前返回：{word.meaning}</p>}
         <div className="form-grid"><label>英文<input value={word.text} onChange={(e) => updateWord(si, wi, { text: e.target.value })} /></label><label>词义<input value={word.meaning || ""} onChange={(e) => updateWord(si, wi, { meaning: e.target.value })} /></label><label>音标<input value={word.phonetic || ""} onChange={(e) => updateWord(si, wi, { phonetic: e.target.value })} /></label></div>
         {(onRegenerateAudio || onUploadAudio) && audioMode(segment) !== "none" && word.text.trim() && <div className="editor-audio-regenerate">

@@ -83,3 +83,11 @@
 .editor-audio-upload-button:has(input:disabled){opacity:.55;cursor:not-allowed}
 .editor-audio-upload-button input{display:none}
 .editor-audio-upload-note{flex-basis:100%;color:#647b73;font-size:11px;line-height:1.45}
+
+.translation-review-alert{margin:10px 0 12px;padding:11px 12px;border:1px solid #c84a3d;border-radius:9px;background:#fff0ed;color:#8d3027;line-height:1.45}
+.translation-review-alert>div{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+.translation-review-alert button{max-width:100%;border:1px solid #c84a3d;background:#fff;color:#8d3027;text-align:left}
+.translation-review-alert button small{display:block;margin-top:3px;max-width:520px;color:#a65a50;white-space:normal;overflow-wrap:anywhere}
+.translation-review-warning{padding:9px 10px;border-radius:7px;background:#fff0ed;color:#96362c}
+.translation-review-input{border-color:#c84a3d!important;background:#fff9f7}
+.editor-word-chip button.translation-review-item{background:#fff0ed;color:#9b3026;font-weight:700}

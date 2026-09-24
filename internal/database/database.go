@@ -35,7 +35,7 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.AuthThrottle{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
+	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.AuthThrottle{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookTranslationItem{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 	return seed(db)
@@ -92,8 +92,9 @@ func seed(db *gorm.DB) error {
 	}
 	modelSettings := []model.SiteSetting{
 		{DictCode: "ai.ocr_model", ItemLabel: "OCR 模型", ItemValue: "local-paddleocr", Sort: 10, Status: 1},
-		{DictCode: "ai.tts_model", ItemLabel: "TTS 模型", ItemValue: "local-qwen3-tts", Sort: 20, Status: 1},
-		{DictCode: "ai.tts_voice", ItemLabel: "TTS 音色", ItemValue: "aiden", Sort: 30, Status: 1},
+		{DictCode: "ai.translation_model", ItemLabel: "翻译模型", ItemValue: "qwen3.7-flash", Sort: 20, Status: 1},
+		{DictCode: "ai.tts_model", ItemLabel: "TTS 模型", ItemValue: "local-qwen3-tts", Sort: 30, Status: 1},
+		{DictCode: "ai.tts_voice", ItemLabel: "TTS 音色", ItemValue: "aiden", Sort: 40, Status: 1},
 	}
 	for index := range modelSettings {
 		row := modelSettings[index]
