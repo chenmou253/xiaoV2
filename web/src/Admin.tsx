@@ -1161,7 +1161,11 @@ function Drafts({
     });
   }
   async function deleteDraft() {
-    if (!id || !confirm("确定删除这个草稿及其上传文件吗？删除后无法恢复。"))
+    const published = detail?.draft?.status === "published";
+    const message = published
+      ? "确定删除这条旧版已发布草稿记录及其工作文件吗？不会影响当前线上书籍。删除后无法恢复。"
+      : "确定删除这个草稿及其上传文件吗？删除后无法恢复。";
+    if (!id || !confirm(message))
       return;
     await run(async () => {
       await api(`/admin/drafts/${id}`, { method: "DELETE" });
@@ -1880,7 +1884,10 @@ function Drafts({
                 </button>
               )
             )}
-            {detail.draft.status !== "published" && can("content.write") && (
+            {detail.draft.status === "published" && !detail.can_delete && (
+              <span>当前线上版本（保留）</span>
+            )}
+            {detail.can_delete && can("content.write") && (
               <button onClick={() => void deleteDraft()}>删除草稿</button>
             )}
           </div>

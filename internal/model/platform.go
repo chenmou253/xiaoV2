@@ -105,6 +105,7 @@ type TextbookDraft struct {
 	ID                 string `gorm:"size:36;primaryKey" json:"id"`
 	BookID             string `gorm:"size:80;not null;index" json:"book_id"`
 	SourceKind         string `gorm:"size:20;not null;default:'upload'" json:"source_kind"`
+	PublishedRevision  uint64 `gorm:"not null;default:0" json:"published_revision"`
 	Title              string `gorm:"size:200;not null" json:"title"`
 	Grade              int    `gorm:"not null" json:"grade"`
 	Term               string `gorm:"size:20;not null" json:"term"`

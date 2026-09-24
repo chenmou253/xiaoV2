@@ -123,10 +123,11 @@ type DraftSummary struct {
 	PageCount int64 `json:"page_count"`
 }
 type DraftDetail struct {
-	Draft model.TextbookDraft          `json:"draft"`
-	Pages []model.TextbookDraftPage    `json:"pages"`
-	Jobs  []model.TextbookJob          `json:"jobs"`
-	Audio []resource.AudioAccentStatus `json:"audio"`
+	Draft     model.TextbookDraft          `json:"draft"`
+	Pages     []model.TextbookDraftPage    `json:"pages"`
+	Jobs      []model.TextbookJob          `json:"jobs"`
+	Audio     []resource.AudioAccentStatus `json:"audio"`
+	CanDelete bool                         `json:"can_delete"`
 }
 
 type AudioSettings struct {
@@ -695,6 +696,21 @@ func (s *EditorService) Get(ctx context.Context, id string) (DraftDetail, error)
 	if e := s.db.WithContext(ctx).First(&out.Draft, "id=?", id).Error; e != nil {
 		return out, e
 	}
+	out.CanDelete = out.Draft.Status != "published"
+	if out.Draft.Status == "published" {
+		var book model.Book
+		if err := s.db.WithContext(ctx).Where("book_id=?", out.Draft.BookID).First(&book).Error; err == nil {
+			currentID, lookupErr := currentPublishedDraftID(s.db.WithContext(ctx), out.Draft.BookID, book.Revision)
+			if lookupErr != nil {
+				return out, lookupErr
+			}
+			out.CanDelete = currentID != out.Draft.ID
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			out.CanDelete = true
+		} else {
+			return out, err
+		}
+	}
 	if e := s.db.WithContext(ctx).Select("id,draft_id,position,printed_page,title,unit,preview,checked,audio_checked,inherited_audio,ocr_model,tts_model,tts_voice,version,updated_at").Where("draft_id=?", id).Order("position").Find(&out.Pages).Error; e != nil {
 		return out, e
 	}
@@ -705,7 +721,8 @@ func (s *EditorService) Get(ctx context.Context, id string) (DraftDetail, error)
 	return out, e
 }
 
-// Delete removes an unpublished draft and all of its conversion jobs/pages.
+// Delete removes a draft and all of its conversion jobs/pages. Older published
+// snapshots may be deleted; the current published snapshot is retained.
 // Running jobs are protected from deletion so a worker cannot continue writing
 // into a draft after the database record has been removed.
 func (s *EditorService) Delete(ctx context.Context, id string, actor uint64) error {
@@ -715,7 +732,20 @@ func (s *EditorService) Delete(ctx context.Context, id string, actor uint64) err
 			return e
 		}
 		if d.Status == "published" {
-			return conflict("已发布教材不能删除，请先创建新的草稿")
+			var book model.Book
+			bookErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("book_id=?", d.BookID).First(&book).Error
+			if bookErr != nil && !errors.Is(bookErr, gorm.ErrRecordNotFound) {
+				return bookErr
+			}
+			if bookErr == nil {
+				currentID, lookupErr := currentPublishedDraftID(tx, d.BookID, book.Revision)
+				if lookupErr != nil {
+					return lookupErr
+				}
+				if currentID == d.ID {
+					return conflict("当前线上版本不能删除；可以删除更早的已发布草稿")
+				}
+			}
 		}
 		var jobs []model.TextbookJob
 		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("draft_id=?", id).Find(&jobs).Error; e != nil {
@@ -1788,7 +1818,14 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 	if e = tx.Where("book_id=?", d.BookID).Delete(&model.BookPage{}).Error; e != nil {
 		return e
 	}
-	return tx.Create(&newPages).Error
+	if e = tx.Create(&newPages).Error; e != nil {
+		return e
+	}
+	var published model.Book
+	if e = tx.Select("revision").Where("book_id=?", d.BookID).First(&published).Error; e != nil {
+		return e
+	}
+	return tx.Model(&model.TextbookDraft{}).Where("id=?", d.ID).Update("published_revision", published.Revision).Error
 }
 
 func (s *EditorService) RunWorker(ctx context.Context) error {
