@@ -1,0 +1,32 @@
+services:
+  db:
+    image: mysql:8.4
+    ports:
+      - "3307:3306"
+    restart: unless-stopped
+    env_file: .env.docker
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env.docker
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - books-data:/data/books
+      - editor-data:/data/editor
+
+volumes:
+  mysql-data:
+  books-data:
+  editor-data:

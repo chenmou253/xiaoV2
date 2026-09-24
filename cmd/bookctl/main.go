@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"xiaov2/internal/bundle"
 	"xiaov2/internal/config"
 	"xiaov2/internal/database"
 	"xiaov2/internal/model"
@@ -87,6 +88,10 @@ func runImportPage(args []string) {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "export-bundle" || os.Args[1] == "import-bundle") {
+		runBundle(os.Args[1:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "import-page" {
 		runImportPage(os.Args[2:])
 		return
@@ -198,4 +203,42 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Printf("imported %s (%d pages, status=%s)\n", bookID, len(data.Pages), status)
+}
+
+func runBundle(args []string) {
+	if (args[0] == "export-bundle" && len(args) != 3) || (args[0] == "import-bundle" && len(args) != 2) {
+		log.Fatal("usage: bookctl export-bundle <book_id> <new_directory> | bookctl import-bundle <directory>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := database.Open(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+	if err = database.Migrate(db); err != nil {
+		log.Fatal(err)
+	}
+	resources, err := resource.New(cfg.ResourceRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if args[0] == "export-bundle" {
+		if err = bundle.Export(db, resources, args[1], args[2]); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("exported %s to %s\n", args[1], args[2])
+		return
+	}
+	bookID, backup, err := bundle.Import(db, resources, args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("imported %s (published)\n", bookID)
+	if backup != "" {
+		fmt.Printf("previous resource backup: %s\n", backup)
+	}
 }

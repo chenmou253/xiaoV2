@@ -2,6 +2,23 @@
 
 本项目将 `/Users/jiechen/english` 的学生账号、管理员账号、RBAC、审计、教材制作/审核/发布及点读阅读能力迁移到 Go 1.25.6 + Gin + GORM + MySQL，并保留 `xiaoV2` 的统一 `book_id` 资源协议。源项目仅作为参考，不会被修改。
 
+## Docker 部署：异地制作，服务器导入
+
+这个部署镜像只包含 Go 服务、构建后的前端和导入命令，不安装 Python、Poppler 或任何本地模型。后台页面和现有 worker 逻辑保持原样；请不要在服务器后台发起 OCR、翻译、音频生成等制作任务。服务器上的正式上架路径是导入已完成的发布包。
+
+如果迁移已有 MySQL，先检查并处理尚在排队或执行中的教材生成任务；服务启动时 worker 会恢复并尝试执行它们，但此镜像没有生成依赖。
+
+1. 将 `.env.docker.example` 复制为 `.env.docker`，修改两个 MySQL 密码。正式对外提供服务时，还要把 `APP_ORIGIN` 改为实际的 HTTPS 域名，并在宿主机配置反向代理；Compose 默认仅把 8080 绑定到宿主机的 `127.0.0.1`。需要真实验证/重置邮件时填写 SMTP。`.env.docker` 不要提交到 Git。
+2. 在服务器执行 `docker compose up -d --build`，用 `curl http://127.0.0.1:8080/healthz` 检查服务。首次管理员初始化可临时填写 `ADMIN_EMAIL`、`ADMIN_PASSWORD`，执行 `docker compose run --rm app /app/server bootstrap`，完成后从 `.env.docker` 移除管理员密码。
+3. 在制作端完成并发布书籍，使用与该项目相同版本的导出命令：`go run ./cmd/bookctl export-bundle grade-4-up /path/to/new-bundle-directory`。目录必须事先不存在。导出包含书籍元数据、页面图片与 JSON、点读音频及清单，不包含 PDF、OCR 缓存、草稿或用户数据。
+4. 将目录传到服务器，例如 `/srv/xiaov2-imports/grade-4-up`。导入同一本书时，建议先执行 `docker compose stop app`，再执行 `docker compose run --rm --no-deps -v /srv/xiaov2-imports/grade-4-up:/imports/book:ro app /app/bookctl import-bundle /imports/book`，最后执行 `docker compose start app`。首次导入也可走相同流程。导入会校验页面和音频引用，成功后打印旧版资源备份目录；确认新版本无误后再自行处理备份。
+
+传输发布包时保留目录可遍历、文件可读的权限；容器以非 root 用户运行。若导入提示权限不足，检查宿主机上发布包及其父目录的权限。
+
+发布包使用 `metadata/book.json` 的 `schema_version: 2`，并携带每页的 `image`、`content` 路径与书籍音频口音配置。旧的 `bookctl import <book_id>` 仍保留供原有本地流程使用，**不是**上述发布包导入命令。
+
+MySQL、`/data/books`、`/data/editor` 分别使用持久化卷。迁移已有站点时必须同时备份、迁移数据库和 `storage/books`；有未完成的草稿时还需迁移 `storage/editor`。发布包导入仅迁移书籍阅读所需的数据，不迁移学生、管理员、草稿和任务历史。数据库事务与文件系统不能跨介质原子提交，因此更新已发布书籍时应按上面的步骤停应用导入，并保留导入前的数据库备份与旧资源备份。不要在未备份的情况下执行 `docker compose down -v`。
+
 ## 启动
 
 项目会自动读取根目录 `.env`；已有进程环境变量优先于 `.env`。密码不会被打印。先安装 Poppler 和项目隔离的 PaddleOCR 环境，再构建前端、启动 Gin：

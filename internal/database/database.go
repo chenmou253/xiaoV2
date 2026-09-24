@@ -42,6 +42,9 @@ func Migrate(db *gorm.DB) error {
 }
 
 func seed(db *gorm.DB) error {
+	if err := removeUnassignedEmptyBuiltinRoles(db); err != nil {
+		return err
+	}
 	permissions := map[string]string{"admin.access": "进入后台", "rbac.read": "查看角色权限", "rbac.write": "管理角色权限", "site_settings.read": "查看网站设置", "site_settings.write": "修改网站设置", "content.read": "查看教材", "content.write": "编辑教材", "content.review": "审核教材", "content.publish": "发布教材", "users.read": "查看学生", "users.write": "启停学生", "audit.read": "查看操作日志"}
 	roles := map[string][]string{"superadmin": {}, "editor": {"admin.access", "content.read", "content.write"}, "reviewer": {"admin.access", "content.read", "content.review"}, "publisher": {"admin.access", "content.read", "content.publish"}, "support": {"admin.access", "users.read", "users.write"}}
 	descriptions := map[string]string{"superadmin": "超级管理员", "editor": "教材编辑", "reviewer": "教材审核", "publisher": "发布管理员", "support": "学生客服"}
@@ -55,8 +58,8 @@ func seed(db *gorm.DB) error {
 		roles["superadmin"] = append(roles["superadmin"], code)
 	}
 	for name, perms := range roles {
-		var role model.Role
-		if err := db.Where("name = ?", name).Attrs(model.Role{Description: descriptions[name], BuiltIn: true}).FirstOrCreate(&role).Error; err != nil {
+		role := model.Role{Name: name}
+		if err := db.Where("name = ?", name).Attrs(model.Role{Name: name, Description: descriptions[name], BuiltIn: true}).FirstOrCreate(&role).Error; err != nil {
 			return err
 		}
 		if err := db.Model(&model.Role{}).Where("id = ? AND description = ?", role.ID, name).Update("description", descriptions[name]).Error; err != nil {
@@ -100,6 +103,31 @@ func seed(db *gorm.DB) error {
 		row := modelSettings[index]
 		if err := db.Where("dict_code = ?", row.DictCode).FirstOrCreate(&row).Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func removeUnassignedEmptyBuiltinRoles(db *gorm.DB) error {
+	var roles []model.Role
+	if err := db.Where("name = ? AND built_in = ?", "", true).Find(&roles).Error; err != nil {
+		return err
+	}
+	for _, role := range roles {
+		var assignments int64
+		if err := db.Model(&model.AdminRole{}).Where("role_id = ?", role.ID).Count(&assignments).Error; err != nil {
+			return err
+		}
+		if assignments != 0 {
+			return fmt.Errorf("cannot repair empty built-in role id=%d: it is assigned to %d admin(s); repair the role name manually", role.ID, assignments)
+		}
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("role_id = ?", role.ID).Delete(&model.RolePermission{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&role).Error
+		}); err != nil {
+			return fmt.Errorf("remove unassigned empty built-in role id=%d: %w", role.ID, err)
 		}
 	}
 	return nil
