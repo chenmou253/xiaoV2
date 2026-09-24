@@ -147,7 +147,7 @@ func (s *EditorService) SwitchModels(ctx context.Context, id string, version, ac
 				}
 				page.TTSModel, page.TTSVoice, page.AudioChecked = settings.TTSModel, settings.TTSVoice, false
 				if err := tx.Model(page).Updates(map[string]any{
-					"tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice, "audio_checked": false,
+					"tts_model": settings.TTSModel, "tts_voice": settings.TTSVoice, "audio_checked": false, "inherited_audio": false,
 					"version": gorm.Expr("version+1"),
 				}).Error; err != nil {
 					return err

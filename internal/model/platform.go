@@ -104,6 +104,7 @@ type PageVersion struct {
 type TextbookDraft struct {
 	ID                 string `gorm:"size:36;primaryKey" json:"id"`
 	BookID             string `gorm:"size:80;not null;index" json:"book_id"`
+	SourceKind         string `gorm:"size:20;not null;default:'upload'" json:"source_kind"`
 	Title              string `gorm:"size:200;not null" json:"title"`
 	Grade              int    `gorm:"not null" json:"grade"`
 	Term               string `gorm:"size:20;not null" json:"term"`
@@ -129,25 +130,26 @@ type TextbookDraft struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 type TextbookDraftPage struct {
-	ID           uint64 `gorm:"primaryKey" json:"id"`
-	DraftID      string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
-	Position     int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
-	PrintedPage  *int   `json:"printed_page"`
-	Title        string `gorm:"size:255;not null" json:"title"`
-	Unit         string `gorm:"size:255;not null" json:"unit"`
-	ImagePath    string `gorm:"size:500;not null" json:"-"`
-	Content      string `gorm:"type:json;not null" json:"content"`
-	Preview      bool   `gorm:"not null;default:false" json:"preview"`
-	Checked      bool   `gorm:"not null;default:false" json:"checked"`
-	AudioChecked bool   `gorm:"not null;default:false" json:"audio_checked"`
+	ID             uint64 `gorm:"primaryKey" json:"id"`
+	DraftID        string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
+	Position       int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
+	PrintedPage    *int   `json:"printed_page"`
+	Title          string `gorm:"size:255;not null" json:"title"`
+	Unit           string `gorm:"size:255;not null" json:"unit"`
+	ImagePath      string `gorm:"size:500;not null" json:"-"`
+	Content        string `gorm:"type:json;not null" json:"content"`
+	Preview        bool   `gorm:"not null;default:false" json:"preview"`
+	Checked        bool   `gorm:"not null;default:false" json:"checked"`
+	AudioChecked   bool   `gorm:"not null;default:false" json:"audio_checked"`
+	InheritedAudio bool   `gorm:"not null;default:false" json:"inherited_audio"`
 	// Model fields are page snapshots. A fully reviewed page keeps these values
 	// even when the draft default changes for later/unreviewed pages.
 	OCRModel         string    `gorm:"size:64;not null;default:''" json:"ocr_model"`
 	TranslationModel string    `gorm:"size:96;not null;default:''" json:"translation_model"`
 	TTSModel         string    `gorm:"size:64;not null;default:''" json:"tts_model"`
-	TTSVoice  string    `gorm:"size:100;not null;default:''" json:"tts_voice"`
-	Version   uint64    `gorm:"not null;default:1" json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	TTSVoice         string    `gorm:"size:100;not null;default:''" json:"tts_voice"`
+	Version          uint64    `gorm:"not null;default:1" json:"version"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 type TextbookTranslationItem struct {
 	ID                uint64     `gorm:"primaryKey" json:"id"`

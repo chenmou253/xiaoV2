@@ -1206,8 +1206,9 @@ function Drafts({
   const currentIsLast = pageNo === lastPage;
   const allSourcePagesAvailable = sourcePageCount > 0 && lastPage >= sourcePageCount;
   const editableDraft = ["draft", "failed"].includes(detail?.draft?.status || "");
-  const currentHasIssues = !!(page?.issues || []).length;
-  const currentHasAudioIssues = audioIssues.length > 0;
+  const inheritedCurrentPage = detail?.draft?.source_kind === "published" && page?.inherited_audio && page?.audio_checked;
+  const currentHasIssues = !inheritedCurrentPage && !!(page?.issues || []).length;
+  const currentHasAudioIssues = !inheritedCurrentPage && audioIssues.length > 0;
   const currentHasOCRContent =
     Array.isArray(page?.content?.segments) && page.content.segments.length > 0;
   const currentHasAudioContent =
@@ -1254,9 +1255,11 @@ function Drafts({
       : detail?.draft?.british_enabled
         ? "英式音频"
         : "音频已关闭";
-  const configuredAudioReady = audioRequired && (detail?.audio || [])
-    .filter((item:Row)=>item.status!=="disabled")
-    .every((item:Row)=>item.status==="ready");
+  const configuredAudioReady = audioRequired && (detail?.draft?.source_kind === "published"
+    ? pages.length > 0 && pages.every((item: Row) => !!item.audio_checked)
+    : (detail?.audio || [])
+      .filter((item: Row) => item.status !== "disabled")
+      .every((item: Row) => item.status === "ready"));
   // `page` is the pre-split legacy task; it already contains audio and must
   // remain reviewable without asking the worker to produce it again.
   const audioGeneratedForCurrent = typeof page?.audio_ready === "boolean"
@@ -1270,6 +1273,9 @@ function Drafts({
     const voice = detail.draft.tts_model === "qwen3-tts-flash"
       ? detail.draft.tts_voice
       : accent === "en-US" ? "aiden" : "ryan";
+    if (detail.draft.source_kind === "published" && configuredAudioReady) {
+      return `${voice} · 已确认`;
+    }
     return status?.status === "ready"
       ? `${voice} · 音频完整`
       : `${voice} · ${status?.ready || 0}/${status?.total || 0}`;

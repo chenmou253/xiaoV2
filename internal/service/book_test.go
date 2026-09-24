@@ -101,7 +101,7 @@ func TestBookServiceReadsCanonicalPageMetadata(t *testing.T) {
 func TestAvailableAccentsComeFromPublishedDatabaseState(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	book := model.Book{BookID: "audio-book", Status: "published", AmericanEnabled: true, BritishEnabled: true, AmericanVoiceID: "aiden", BritishVoiceID: "ryan", AudioConfigVersion: 1}
-	repo := fakeRepository{books: []model.Book{book}}
+	repo := writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden", "en-GB": "ryan"})
 	view, err := NewBookService(repo, resources).Get(context.Background(), book.BookID)
 	if err != nil || len(view.Audio.AvailableAccents) != 2 {
 		t.Fatalf("enabled accents were not exposed from database state: %#v %v", view.Audio, err)
@@ -118,10 +118,17 @@ func TestAvailableAccentsComeFromPublishedDatabaseState(t *testing.T) {
 func TestConfiguredAndLegacyAvailableAccents(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	book := model.Book{BookID: "both-book", Status: "published", AmericanEnabled: true, BritishEnabled: true, AmericanVoiceID: "aiden", BritishVoiceID: "ryan", AudioConfigVersion: 1}
-	repo := fakeRepository{books: []model.Book{book}}
+	repo := writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden", "en-GB": "ryan"})
 	view, err := NewBookService(repo, resources).Get(context.Background(), book.BookID)
 	if err != nil || len(view.Audio.AvailableAccents) != 2 {
 		t.Fatalf("expected both accents: %#v %v", view.Audio, err)
+	}
+
+	// The database can still advertise British after its audio files disappear.
+	repo = writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden"})
+	view, err = NewBookService(repo, resources).Get(context.Background(), book.BookID)
+	if err != nil || len(view.Audio.AvailableAccents) != 1 || view.Audio.AvailableAccents[0] != "en-US" {
+		t.Fatalf("missing British audio must not be offered: %#v %v", view.Audio, err)
 	}
 
 	book.AudioConfigVersion = 0

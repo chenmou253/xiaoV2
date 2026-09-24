@@ -21,10 +21,10 @@ type ImportPageJSONInput struct {
 }
 
 type ImportPageJSONResult struct {
-	DraftID    string
-	BookID     string
-	Page       int
-	OCRPath    string
+	DraftID     string
+	BookID      string
+	Page        int
+	OCRPath     string
 	ContentPath string
 }
 
@@ -306,12 +306,13 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 		}
 		settings := draftModelSettings(lockedDraft)
 		if err := tx.Model(&current).Updates(map[string]any{
-			"content":       string(dbRaw),
-			"checked":       false,
-			"audio_checked": false,
-			"tts_model":     settings.TTSModel,
-			"tts_voice":     settings.TTSVoice,
-			"version":       gorm.Expr("version+1"),
+			"content":         string(dbRaw),
+			"checked":         false,
+			"audio_checked":   false,
+			"inherited_audio": false,
+			"tts_model":       settings.TTSModel,
+			"tts_voice":       settings.TTSVoice,
+			"version":         gorm.Expr("version+1"),
 		}).Error; err != nil {
 			return err
 		}
@@ -340,8 +341,8 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 			return err
 		}
 		return editorAudit(tx, actor, "draft.page.import-json", draft.ID, map[string]any{
-			"page": page,
-			"ocr_file": filepath.Base(input.OCRPath),
+			"page":         page,
+			"ocr_file":     filepath.Base(input.OCRPath),
 			"content_file": filepath.Base(input.ContentPath),
 		})
 	})
@@ -356,10 +357,10 @@ func (s *EditorService) ImportPageJSON(ctx context.Context, draftID string, page
 		return ImportPageJSONResult{}, txErr
 	}
 	return ImportPageJSONResult{
-		DraftID: draft.ID,
-		BookID: draft.BookID,
-		Page: page,
-		OCRPath: ocrTarget,
+		DraftID:     draft.ID,
+		BookID:      draft.BookID,
+		Page:        page,
+		OCRPath:     ocrTarget,
 		ContentPath: contentTarget,
 	}, nil
 }

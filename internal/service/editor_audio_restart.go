@@ -109,9 +109,10 @@ func (s *EditorService) restartPageAudio(ctx context.Context, id string, version
 			return e
 		}
 		if e := tx.Model(&current).Updates(map[string]any{
-			"checked":       true,
-			"audio_checked": false,
-			"version":       gorm.Expr("version+1"),
+			"checked":         true,
+			"audio_checked":   false,
+			"inherited_audio": false,
+			"version":         gorm.Expr("version+1"),
 		}).Error; e != nil {
 			return e
 		}

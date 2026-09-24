@@ -242,12 +242,18 @@ func (s *BookService) toBook(item model.Book) Book {
 		cover = "/api/v1/books/" + url.PathEscape(item.BookID) + "/cover"
 	}
 	available := bookAvailableAccents(item)
-	// Older published books predate explicit accent settings. Their migrated
-	// flags default to both accents, so expose only accents with real published
-	// audio files instead of advertising choices that can only return 404.
-	if item.AudioConfigVersion == 0 {
-		available = s.resources.AudioAccents(item.BookID)
+	// A configured accent is only usable when published audio exists for it.
+	playable := make(map[string]bool, 2)
+	for _, accent := range s.resources.AudioAccents(item.BookID) {
+		playable[accent] = true
 	}
+	filtered := available[:0]
+	for _, accent := range available {
+		if playable[accent] {
+			filtered = append(filtered, accent)
+		}
+	}
+	available = filtered
 	defaultAccent := ""
 	if len(available) > 0 {
 		defaultAccent = available[0]

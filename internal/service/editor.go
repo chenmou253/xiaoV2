@@ -90,7 +90,6 @@ func (e translationIssuesError) Error() string {
 	return head + "\n- " + strings.Join(e.Details, "\n- ")
 }
 
-
 func scanDaemonLine(ctx context.Context, scanner *bufio.Scanner, stop func(), name string) ([]byte, error) {
 	result := make(chan daemonScanResult, 1)
 	go func() {
@@ -205,6 +204,10 @@ func pageModelSettings(d model.TextbookDraft, p model.TextbookDraftPage) ai.Sett
 
 func pageIsLocked(p model.TextbookDraftPage) bool { return p.Checked && p.AudioChecked }
 
+func inheritedPublishedAudio(d model.TextbookDraft, p model.TextbookDraftPage) bool {
+	return d.SourceKind == "published" && p.InheritedAudio && p.AudioChecked
+}
+
 // Translation provenance is locked as soon as the text stage is confirmed.
 // Before that, a page follows the current draft translation default; the page
 // snapshot is written only after a translation job actually succeeds.
@@ -265,18 +268,18 @@ func settingsVoices(d model.TextbookDraft, settings ai.Settings) map[string]stri
 }
 
 type DraftPageView struct {
-	Content      map[string]any `json:"content"`
-	Title        string         `json:"title"`
-	Unit         string         `json:"unit"`
-	Version      uint64         `json:"version"`
-	Preview      bool           `json:"preview"`
-	Checked      bool           `json:"checked"`
-	AudioChecked bool           `json:"audio_checked"`
-	AudioReady   bool           `json:"audio_ready"`
-	Image        string         `json:"image"`
-	Issues       []string       `json:"issues"`
+	Content        map[string]any `json:"content"`
+	Title          string         `json:"title"`
+	Unit           string         `json:"unit"`
+	Version        uint64         `json:"version"`
+	Preview        bool           `json:"preview"`
+	Checked        bool           `json:"checked"`
+	AudioChecked   bool           `json:"audio_checked"`
+	InheritedAudio bool           `json:"inherited_audio"`
+	AudioReady     bool           `json:"audio_ready"`
+	Image          string         `json:"image"`
+	Issues         []string       `json:"issues"`
 }
-
 
 func clonePageContent(content map[string]any) (map[string]any, error) {
 	raw, err := json.Marshal(content)
@@ -609,10 +612,8 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 		grade := 0
 		fmt.Sscan(b.Grade, &grade)
 		americanVoice, britishVoice := tts.DefaultAmericanVoice, tts.DefaultBritishVoice
-		if b.AudioConfigVersion == 0 {
-			b.AmericanEnabled, b.BritishEnabled = true, true
-		}
-		d := model.TextbookDraft{ID: id, BookID: book, Title: b.Title, Grade: grade, Term: b.Semester, Edition: b.Publisher, AmericanEnabled: b.AmericanEnabled, BritishEnabled: b.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "draft", CreatedBy: actor, UpdatedBy: actor}
+		b.AmericanEnabled, b.BritishEnabled = publishedCopyAccents(b, s.resources.AudioAccents(book))
+		d := model.TextbookDraft{ID: id, BookID: book, SourceKind: "published", Title: b.Title, Grade: grade, Term: b.Semester, Edition: b.Publisher, AmericanEnabled: b.AmericanEnabled, BritishEnabled: b.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice, Status: "draft", CreatedBy: actor, UpdatedBy: actor}
 		if e := tx.Create(&d).Error; e != nil {
 			return e
 		}
@@ -649,7 +650,7 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 			if e != nil {
 				return e
 			}
-			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(storageRaw), Preview: p.Preview, Checked: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
+			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(storageRaw), Preview: p.Preview, Checked: true, AudioChecked: true, InheritedAudio: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
 			if e = tx.Create(&dp).Error; e != nil {
 				return e
 			}
@@ -676,19 +677,6 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 				return e
 			}
 		}
-		var copiedPages []model.TextbookDraftPage
-		if e := tx.Where("draft_id=?", id).Find(&copiedPages).Error; e != nil {
-			return e
-		}
-		for _, page := range copiedPages {
-			audioChecked := !hasAudioItems(page.Content)
-			if !audioChecked && len(draftVoices(d)) > 0 {
-				audioChecked = !s.missingDraftAudio(d, page)
-			}
-			if e := tx.Model(&page).Update("audio_checked", audioChecked).Error; e != nil {
-				return e
-			}
-		}
 		return editorAudit(tx, actor, "draft.copy", id, map[string]any{"book_id": book, "revision": b.Revision})
 	})
 	if e == nil {
@@ -701,10 +689,13 @@ func (s *EditorService) Get(ctx context.Context, id string) (DraftDetail, error)
 		Pages: make([]model.TextbookDraftPage, 0),
 		Jobs:  make([]model.TextbookJob, 0),
 	}
+	if e := s.upgradeLegacyPublishedDraft(ctx, id); e != nil {
+		return out, e
+	}
 	if e := s.db.WithContext(ctx).First(&out.Draft, "id=?", id).Error; e != nil {
 		return out, e
 	}
-	if e := s.db.WithContext(ctx).Select("id,draft_id,position,printed_page,title,unit,preview,checked,audio_checked,ocr_model,tts_model,tts_voice,version,updated_at").Where("draft_id=?", id).Order("position").Find(&out.Pages).Error; e != nil {
+	if e := s.db.WithContext(ctx).Select("id,draft_id,position,printed_page,title,unit,preview,checked,audio_checked,inherited_audio,ocr_model,tts_model,tts_voice,version,updated_at").Where("draft_id=?", id).Order("position").Find(&out.Pages).Error; e != nil {
 		return out, e
 	}
 	e := s.db.WithContext(ctx).Where("draft_id=?", id).Order("id DESC").Limit(100).Find(&out.Jobs).Error
@@ -763,6 +754,9 @@ func (s *EditorService) Delete(ctx context.Context, id string, actor uint64) err
 }
 
 func (s *EditorService) Page(ctx context.Context, id string, pos int) (DraftPageView, error) {
+	if e := s.upgradeLegacyPublishedDraft(ctx, id); e != nil {
+		return DraftPageView{}, e
+	}
 	var d model.TextbookDraft
 	if e := s.db.WithContext(ctx).First(&d, "id=?", id).Error; e != nil {
 		return DraftPageView{}, e
@@ -775,7 +769,7 @@ func (s *EditorService) Page(ctx context.Context, id string, pos int) (DraftPage
 	if e != nil {
 		return DraftPageView{}, e
 	}
-	audioReady := !hasAudioItems(p.Content)
+	audioReady := !hasAudioItems(p.Content) || inheritedPublishedAudio(d, p)
 	if !audioReady {
 		ready, err := s.pageAudioReadyDB(ctx, d, pos)
 		if err != nil {
@@ -783,7 +777,7 @@ func (s *EditorService) Page(ctx context.Context, id string, pos int) (DraftPage
 		}
 		audioReady = ready
 	}
-	return DraftPageView{Content: content, Title: p.Title, Unit: p.Unit, Version: p.Version, Preview: p.Preview, Checked: p.Checked, AudioChecked: p.AudioChecked, AudioReady: audioReady, Image: fmt.Sprintf("/api/v1/admin/drafts/%s/pages/%d/image", id, pos), Issues: publicationIssues(content)}, nil
+	return DraftPageView{Content: content, Title: p.Title, Unit: p.Unit, Version: p.Version, Preview: p.Preview, Checked: p.Checked, AudioChecked: p.AudioChecked, InheritedAudio: p.InheritedAudio, AudioReady: audioReady, Image: fmt.Sprintf("/api/v1/admin/drafts/%s/pages/%d/image", id, pos), Issues: publicationIssues(content)}, nil
 }
 func (s *EditorService) Image(ctx context.Context, id string, pos int) (string, error) {
 	var p model.TextbookDraftPage
@@ -889,7 +883,7 @@ func (s *EditorService) SaveMeta(ctx context.Context, id, title string, grade in
 			return e
 		}
 		if draft.AmericanEnabled != audio.AmericanEnabled || draft.BritishEnabled != audio.BritishEnabled {
-			if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=?", id).Update("audio_checked", false).Error; e != nil {
+			if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=?", id).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; e != nil {
 				return e
 			}
 			draft.AmericanEnabled, draft.BritishEnabled = audio.AmericanEnabled, audio.BritishEnabled
@@ -949,9 +943,7 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 	if _, ok := input.Content["segments"].([]any); !ok {
 		return bad("页面缺少 segments")
 	}
-	if (input.Checked || input.AudioChecked) && len(publicationIssues(input.Content)) > 0 {
-		return bad("页面仍有待完成内容")
-	}
+	issues := publicationIssues(input.Content)
 	storageContent, e := clonePageContent(input.Content)
 	if e != nil {
 		return bad("页面 JSON 无效")
@@ -1001,10 +993,18 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 		if generationChanged {
 			input.Checked = false
 			input.AudioChecked = false
+		} else if d.SourceKind == "published" && (changed || p.Title != input.Title || p.Unit != input.Unit || p.Preview != input.Preview) {
+			// A metadata or segment-order edit still needs confirmation on this
+			// page, but unchanged audio remains inherited and playable.
+			input.Checked = false
 		}
 		// Cover images and separator pages can contain no OCR segments. They
 		// have nothing to synthesize and may be approved without audio files.
-		if input.AudioChecked && hasAudioItems(string(raw)) {
+		keepInheritedAudio := inheritedPublishedAudio(d, p) && input.AudioChecked && !generationChanged
+		if (input.Checked || input.AudioChecked) && len(issues) > 0 && !keepInheritedAudio {
+			return bad("页面仍有待完成内容")
+		}
+		if input.AudioChecked && hasAudioItems(string(raw)) && !keepInheritedAudio {
 			ready, readyErr := s.pageAudioReadyDB(ctx, d, pos)
 			if readyErr != nil {
 				return readyErr
@@ -1021,7 +1021,7 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 			// draft default; OCR provenance remains the last recognized model.
 			p.TTSModel, p.TTSVoice = draftModelSettings(d).TTSModel, draftModelSettings(d).TTSVoice
 		}
-		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "version": gorm.Expr("version+1")}
+		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "inherited_audio": keepInheritedAudio, "version": gorm.Expr("version+1")}
 		if generationChanged {
 			pageUpdates["tts_model"], pageUpdates["tts_voice"] = p.TTSModel, p.TTSVoice
 		}
@@ -1160,7 +1160,7 @@ func (s *EditorService) Reorder(ctx context.Context, id string, positions []int,
 			return e
 		}
 		for i, old := range positions {
-			if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, old+1000000).Updates(map[string]any{"position": i + 1, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			if e := tx.Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", id, old+1000000).Updates(map[string]any{"position": i + 1, "checked": false, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
 			if e := tx.Model(&model.TextbookTranslationItem{}).Where("draft_id=? AND page=?", id, old+1000000).Update("page", i+1).Error; e != nil {
@@ -1195,6 +1195,9 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 	if action == "audio-restart-page" {
 		return s.restartPageAudio(ctx, id, version, actor, page)
 	}
+	if e := s.upgradeLegacyPublishedDraft(ctx, id); e != nil {
+		return e
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var d model.TextbookDraft
 		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&d, "id=?", id).Error; e != nil {
@@ -1226,7 +1229,8 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				return bad(fmt.Sprintf("PDF 共 %d 页，尚未生成完毕", d.SourcePageCount))
 			}
 			for _, p := range pages {
-				if !p.Checked || !p.AudioChecked || len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || s.missingDraftAudio(d, p) {
+				inherited := inheritedPublishedAudio(d, p)
+				if !p.Checked || !p.AudioChecked || (!inherited && (len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || s.missingDraftAudio(d, p))) {
 					return bad(fmt.Sprintf("第%d页尚未完成正文或音频确认", p.Position))
 				}
 			}
@@ -1263,8 +1267,10 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				Where("draft_id=? AND position=?", id, page).First(&current).Error; e != nil {
 				return bad(fmt.Sprintf("第 %d 页尚未生成", page))
 			}
-			if issues := s.pageTextReviewIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
-				return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", page, strings.Join(issues, "；")))
+			if !inheritedPublishedAudio(d, current) {
+				if issues := s.pageTextReviewIssues(ctx, id, current.Position, current.Content); len(issues) > 0 {
+					return bad(fmt.Sprintf("第 %d 页正文仍有待处理内容：%s", page, strings.Join(issues, "；")))
+				}
 			}
 			updates := map[string]any{
 				"checked": true,
@@ -1307,10 +1313,11 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 				"reviewed": false,
 			})
 			if e := tx.Model(&target).Updates(map[string]any{
-				"content":       string(emptyContent),
-				"checked":       false,
-				"audio_checked": false,
-				"version":       gorm.Expr("version+1"),
+				"content":         string(emptyContent),
+				"checked":         false,
+				"audio_checked":   false,
+				"inherited_audio": false,
+				"version":         gorm.Expr("version+1"),
 			}).Error; e != nil {
 				return e
 			}
@@ -1362,7 +1369,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if active > 0 {
 				return conflict("已有页面生成任务正在进行")
 			}
-			if e := tx.Model(&current).Update("audio_checked", false).Error; e != nil {
+			if e := tx.Model(&current).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; e != nil {
 				return e
 			}
 			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: "audio", Page: current.Position, Status: "queued"}).Error; e != nil {
@@ -1396,7 +1403,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if e := s.clearDraftPageAudioArtifacts(d.ID, d.BookID, page); e != nil {
 				return e
 			}
-			if e := tx.Model(&current).Updates(map[string]any{"checked": true, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			if e := tx.Model(&current).Updates(map[string]any{"checked": true, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
 			current.Checked = true
@@ -1435,9 +1442,9 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 					if !p.Checked || len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || !hasAudioItems(p.Content) {
 						continue
 					}
-					if s.missingDraftAudio(d, *p) {
+					if !inheritedPublishedAudio(d, *p) && s.missingDraftAudio(d, *p) {
 						pending++
-						if e := tx.Model(p).Update("audio_checked", false).Error; e != nil {
+						if e := tx.Model(p).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; e != nil {
 							return e
 						}
 					}
@@ -1465,6 +1472,20 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			}
 			if len(configuredVoices) == 0 {
 				return bad("请至少开启一种发音后再生成音频")
+			}
+			if action == "audio-regenerate-us" || action == "audio-regenerate-uk" {
+				var affected []model.TextbookDraftPage
+				if e := tx.Where("draft_id=?", id).Find(&affected).Error; e != nil {
+					return e
+				}
+				for _, affectedPage := range affected {
+					if !hasAudioItems(affectedPage.Content) {
+						continue
+					}
+					if e := tx.Model(&affectedPage).Updates(map[string]any{"audio_checked": false, "inherited_audio": false}).Error; e != nil {
+						return e
+					}
+				}
 			}
 			if e := tx.Create(&model.TextbookJob{DraftID: id, Kind: kind, Page: 0, Accent: accent, VoiceID: voice, Status: "queued"}).Error; e != nil {
 				return e
@@ -1534,7 +1555,7 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 		if e := tx.Model(&d).Updates(map[string]any{"status": next, "review_note": note, "version": gorm.Expr("version+1"), "updated_by": actor}).Error; e != nil {
 			return e
 		}
-		return editorAudit(tx, actor, "draft."+action, id, map[string]string{"book_id": d.BookID, "note": note})
+		return editorAudit(tx, actor, "draft."+action, id, map[string]any{"book_id": d.BookID, "note": note, "page": page})
 	})
 }
 func (s *EditorService) missingDraftAudio(d model.TextbookDraft, page model.TextbookDraftPage) bool {
@@ -2103,7 +2124,7 @@ func (s *EditorService) runBookAudioJob(ctx context.Context, job *model.Textbook
 	s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(pages)})
 	errorsFound := make([]string, 0)
 	for index, page := range pages {
-		if job.Kind == "audio-missing" && (!page.Checked || len(s.pageTextReviewIssues(ctx, d.ID, page.Position, page.Content)) > 0) {
+		if job.Kind == "audio-missing" && (inheritedPublishedAudio(d, page) || !page.Checked || len(s.pageTextReviewIssues(ctx, d.ID, page.Position, page.Content)) > 0) {
 			job.Progress = index + 1
 			s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total})
 			continue
@@ -2368,57 +2389,212 @@ func (s *EditorService) translatePage(ctx context.Context, job *model.TextbookJo
 	return s.translateCloudItems(ctx, job, d, current, work, modelID)
 }
 
+type cloudTranslationPayload struct {
+	Sentences []string `json:"sentences"`
+	Words     []string `json:"words"`
+}
+type cloudTranslationResult struct {
+	Translations []string   `json:"translations"`
+	Words        [][]string `json:"words"`
+}
 
-type cloudTranslationPayload struct { Sentences []string `json:"sentences"`; Words []string `json:"words"` }
-type cloudTranslationResult struct { Translations []string `json:"translations"`; Words [][]string `json:"words"` }
-
-func normalizeTranslationLookup(v string) string { return strings.Join(strings.Fields(strings.TrimSpace(v)), " ") }
+func normalizeTranslationLookup(v string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(v)), " ")
+}
 
 func (s *EditorService) translateCloudItems(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, current model.TextbookDraftPage, work, modelID string) error {
 	var items []model.TextbookTranslationItem
-	if err:=s.db.WithContext(ctx).Where("draft_id=? AND page=? AND item_type IN ? AND status IN ?",d.ID,current.Position,[]string{"sentence","word"},[]string{"pending","review_warning"}).Order("id ASC").Find(&items).Error;err!=nil{return err}
-	job.Progress,job.Total=0,len(items); _=s.db.Model(job).Updates(map[string]any{"progress":0,"total":len(items)}).Error
-	if len(items)==0{return nil}
-	provider:=""; if info,ok:=ai.Find(modelID);ok{provider=info.Provider}
-	issues:=0
-	misses:=make([]model.TextbookTranslationItem,0,len(items))
-	for _,item:=range items {
-		key:=normalizeTranslationLookup(item.SourceText); var cached model.TextbookTranslationItem
-		q:=s.db.WithContext(ctx).Where("item_type=? AND status='translated' AND id<>?",item.ItemType,item.ID)
-		if item.ItemType=="sentence"{q=q.Where("source_text=? AND translation IS NOT NULL AND translation<>''",key)}else{q=q.Where("source_text=? AND meaning<>'' AND phonetic<>''",key)}
-		err:=q.Order("updated_at DESC").First(&cached).Error
-		if err==nil{
-			u:=map[string]any{"status":"translated","failure_reason":nil,"revision":gorm.Expr("revision+1"),"translation_model":cached.TranslationModel,"provider":cached.Provider}
-			if item.ItemType=="sentence"{u["translation"]=cached.Translation}else{u["meaning"]=cached.Meaning;u["phonetic"]=cached.Phonetic}
-			if err=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",item.ID).Updates(u).Error;err!=nil{return err}
+	if err := s.db.WithContext(ctx).Where("draft_id=? AND page=? AND item_type IN ? AND status IN ?", d.ID, current.Position, []string{"sentence", "word"}, []string{"pending", "review_warning"}).Order("id ASC").Find(&items).Error; err != nil {
+		return err
+	}
+	job.Progress, job.Total = 0, len(items)
+	_ = s.db.Model(job).Updates(map[string]any{"progress": 0, "total": len(items)}).Error
+	if len(items) == 0 {
+		return nil
+	}
+	provider := ""
+	if info, ok := ai.Find(modelID); ok {
+		provider = info.Provider
+	}
+	issues := 0
+	misses := make([]model.TextbookTranslationItem, 0, len(items))
+	for _, item := range items {
+		key := normalizeTranslationLookup(item.SourceText)
+		var cached model.TextbookTranslationItem
+		q := s.db.WithContext(ctx).Where("item_type=? AND status='translated' AND id<>?", item.ItemType, item.ID)
+		if item.ItemType == "sentence" {
+			q = q.Where("source_text=? AND translation IS NOT NULL AND translation<>''", key)
+		} else {
+			q = q.Where("source_text=? AND meaning<>'' AND phonetic<>''", key)
+		}
+		err := q.Order("updated_at DESC").First(&cached).Error
+		if err == nil {
+			u := map[string]any{"status": "translated", "failure_reason": nil, "revision": gorm.Expr("revision+1"), "translation_model": cached.TranslationModel, "provider": cached.Provider}
+			if item.ItemType == "sentence" {
+				u["translation"] = cached.Translation
+			} else {
+				u["meaning"] = cached.Meaning
+				u["phonetic"] = cached.Phonetic
+			}
+			if err = s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?", item.ID).Updates(u).Error; err != nil {
+				return err
+			}
 			// Database reuse is already trusted: intentionally no local review.
-			job.Progress++; _=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error; continue
+			job.Progress++
+			_ = s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total}).Error
+			continue
 		}
-		if err!=nil&&!errors.Is(err,gorm.ErrRecordNotFound){return err}; misses=append(misses,item)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		misses = append(misses, item)
 	}
-	sentenceIDs:=map[string][]uint64{}; wordIDs:=map[string][]uint64{}; sentences:=[]string{}; words:=[]string{}
-	for _,item:=range misses{key:=normalizeTranslationLookup(item.SourceText);if item.ItemType=="sentence"{if _,ok:=sentenceIDs[key];!ok{sentences=append(sentences,key)};sentenceIDs[key]=append(sentenceIDs[key],item.ID)}else{if _,ok:=wordIDs[key];!ok{words=append(words,key)};wordIDs[key]=append(wordIDs[key],item.ID)}}
-	if len(sentences)>0||len(words)>0{
-		if err:=os.MkdirAll(work,0750);err!=nil{return err}; input:=filepath.Join(work,fmt.Sprintf("translate-items-%03d-input.json",current.Position)); output:=filepath.Join(work,fmt.Sprintf("translate-items-%03d-output.json",current.Position)); defer os.Remove(input);defer os.Remove(output)
-		raw,_:=json.Marshal(cloudTranslationPayload{Sentences:sentences,Words:words});if err:=os.WriteFile(input,raw,0640);err!=nil{return err}
-		cmd:=exec.CommandContext(ctx,s.cfg.Python,filepath.Join("scripts","translate_items_cloud.py"),"--input",input,"--output",output,"--model-id",modelID);cmd.Dir=filepath.Dir(filepath.Dir(s.cfg.ResourceRoot));cmd.Env=append(os.Environ(),"RESOURCE_ROOT="+work);var stderr strings.Builder;cmd.Stderr=&stderr;cmd.Stdout=os.Stdout
-		if err:=cmd.Run();err!=nil{return fmt.Errorf("translate items: %w: %s",err,strings.TrimSpace(stderr.String()))};outRaw,err:=os.ReadFile(output);if err!=nil{return err};var result cloudTranslationResult;if err=json.Unmarshal(outRaw,&result);err!=nil{return err};if len(result.Translations)!=len(sentences)||len(result.Words)!=len(words){return errors.New("cloud translation result count mismatch")}
-		for i,source:=range sentences{translation:=strings.TrimSpace(result.Translations[i]);for _,id:=range sentenceIDs[source]{status,reason:="translated","";if translation==""{status="review_warning";reason="cloud sentence translation is empty; manual review required"}else{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_sentence","text":source,"translation":translation,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}}};if status=="review_warning"{issues++};u:=map[string]any{"translation":translation,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
-		for i,source:=range words{row:=result.Words[i];if len(row)!=2||strings.TrimSpace(row[0])==""||strings.TrimSpace(row[1])==""{return errors.New("incomplete cloud word translation")};meaning,phonetic:=strings.TrimSpace(row[0]),strings.TrimSpace(row[1]);for _,id:=range wordIDs[source]{review,reviewErr:=s.runLocalTranslationItem(ctx,map[string]any{"task":"review_word","text":source,"meaning":meaning,"phonetic":phonetic,"model_id":"local-qwen3-4b-instruct-2507"},"local-qwen3-4b-instruct-2507");status,reason:="translated","";if reviewErr!=nil||!review.Passed{status="review_warning";if reviewErr!=nil{reason=reviewErr.Error()}else{reason=review.Reason}};if status=="review_warning"{issues++};u:=map[string]any{"meaning":meaning,"phonetic":phonetic,"translation_model":modelID,"provider":provider,"status":status,"failure_reason":nil,"revision":gorm.Expr("revision+1")};if reason!=""{u["failure_reason"]=reason};if err:=s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?",id).Updates(u).Error;err!=nil{return err};job.Progress++;_=s.db.Model(job).Updates(map[string]any{"progress":job.Progress,"total":job.Total}).Error}}
+	sentenceIDs := map[string][]uint64{}
+	wordIDs := map[string][]uint64{}
+	sentences := []string{}
+	words := []string{}
+	for _, item := range misses {
+		key := normalizeTranslationLookup(item.SourceText)
+		if item.ItemType == "sentence" {
+			if _, ok := sentenceIDs[key]; !ok {
+				sentences = append(sentences, key)
+			}
+			sentenceIDs[key] = append(sentenceIDs[key], item.ID)
+		} else {
+			if _, ok := wordIDs[key]; !ok {
+				words = append(words, key)
+			}
+			wordIDs[key] = append(wordIDs[key], item.ID)
+		}
 	}
-	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?",d.ID,current.Position).Updates(map[string]any{"translation_model":modelID,"checked":false,"audio_checked":false,"version":gorm.Expr("version+1")}).Error;err!=nil{return err}
-	if err:=s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?",d.ID).Update("version",gorm.Expr("version+1")).Error;err!=nil{return err}
-	if issues>0{
+	if len(sentences) > 0 || len(words) > 0 {
+		if err := os.MkdirAll(work, 0750); err != nil {
+			return err
+		}
+		input := filepath.Join(work, fmt.Sprintf("translate-items-%03d-input.json", current.Position))
+		output := filepath.Join(work, fmt.Sprintf("translate-items-%03d-output.json", current.Position))
+		defer os.Remove(input)
+		defer os.Remove(output)
+		raw, _ := json.Marshal(cloudTranslationPayload{Sentences: sentences, Words: words})
+		if err := os.WriteFile(input, raw, 0640); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, s.cfg.Python, filepath.Join("scripts", "translate_items_cloud.py"), "--input", input, "--output", output, "--model-id", modelID)
+		cmd.Dir = filepath.Dir(filepath.Dir(s.cfg.ResourceRoot))
+		cmd.Env = append(os.Environ(), "RESOURCE_ROOT="+work)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("translate items: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		outRaw, err := os.ReadFile(output)
+		if err != nil {
+			return err
+		}
+		var result cloudTranslationResult
+		if err = json.Unmarshal(outRaw, &result); err != nil {
+			return err
+		}
+		if len(result.Translations) != len(sentences) || len(result.Words) != len(words) {
+			return errors.New("cloud translation result count mismatch")
+		}
+		for i, source := range sentences {
+			translation := strings.TrimSpace(result.Translations[i])
+			for _, id := range sentenceIDs[source] {
+				status, reason := "translated", ""
+				if translation == "" {
+					status = "review_warning"
+					reason = "cloud sentence translation is empty; manual review required"
+				} else {
+					review, reviewErr := s.runLocalTranslationItem(ctx, map[string]any{"task": "review_sentence", "text": source, "translation": translation, "model_id": "local-qwen3-4b-instruct-2507"}, "local-qwen3-4b-instruct-2507")
+					if reviewErr != nil || !review.Passed {
+						status = "review_warning"
+						if reviewErr != nil {
+							reason = reviewErr.Error()
+						} else {
+							reason = review.Reason
+						}
+					}
+				}
+				if status == "review_warning" {
+					issues++
+				}
+				u := map[string]any{"translation": translation, "translation_model": modelID, "provider": provider, "status": status, "failure_reason": nil, "revision": gorm.Expr("revision+1")}
+				if reason != "" {
+					u["failure_reason"] = reason
+				}
+				if err := s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?", id).Updates(u).Error; err != nil {
+					return err
+				}
+				job.Progress++
+				_ = s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total}).Error
+			}
+		}
+		for i, source := range words {
+			row := result.Words[i]
+			if len(row) != 2 || strings.TrimSpace(row[0]) == "" || strings.TrimSpace(row[1]) == "" {
+				return errors.New("incomplete cloud word translation")
+			}
+			meaning, phonetic := strings.TrimSpace(row[0]), strings.TrimSpace(row[1])
+			for _, id := range wordIDs[source] {
+				review, reviewErr := s.runLocalTranslationItem(ctx, map[string]any{"task": "review_word", "text": source, "meaning": meaning, "phonetic": phonetic, "model_id": "local-qwen3-4b-instruct-2507"}, "local-qwen3-4b-instruct-2507")
+				status, reason := "translated", ""
+				if reviewErr != nil || !review.Passed {
+					status = "review_warning"
+					if reviewErr != nil {
+						reason = reviewErr.Error()
+					} else {
+						reason = review.Reason
+					}
+				}
+				if status == "review_warning" {
+					issues++
+				}
+				u := map[string]any{"meaning": meaning, "phonetic": phonetic, "translation_model": modelID, "provider": provider, "status": status, "failure_reason": nil, "revision": gorm.Expr("revision+1")}
+				if reason != "" {
+					u["failure_reason"] = reason
+				}
+				if err := s.db.WithContext(ctx).Model(&model.TextbookTranslationItem{}).Where("id=?", id).Updates(u).Error; err != nil {
+					return err
+				}
+				job.Progress++
+				_ = s.db.Model(job).Updates(map[string]any{"progress": job.Progress, "total": job.Total}).Error
+			}
+		}
+	}
+	if err := s.db.WithContext(ctx).Model(&model.TextbookDraftPage{}).Where("draft_id=? AND position=?", d.ID, current.Position).Updates(map[string]any{"translation_model": modelID, "checked": false, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Model(&model.TextbookDraft{}).Where("id=?", d.ID).Update("version", gorm.Expr("version+1")).Error; err != nil {
+		return err
+	}
+	if issues > 0 {
 		var reviewItems []model.TextbookTranslationItem
-		if err:=s.db.WithContext(ctx).Where("draft_id=? AND page=? AND status='review_warning'",d.ID,current.Position).Order("segment_id ASC, CASE item_type WHEN 'sentence' THEN 0 ELSE 1 END, word_index ASC, id ASC").Find(&reviewItems).Error;err!=nil{return err}
-		details:=make([]string,0,len(reviewItems))
-		clip:=func(value string,limit int)string{value=strings.TrimSpace(value);r:=[]rune(value);if len(r)<=limit{return value};return string(r[:limit])+"…"}
-		for _,item:=range reviewItems{
-			kind:="整句";if item.ItemType=="word"{kind="单词"}
-			reason:="需要人工核对";if item.FailureReason!=nil&&strings.TrimSpace(*item.FailureReason)!=""{reason=clip(*item.FailureReason,180)}
-			details=append(details,fmt.Sprintf("%s「%s」：%s",kind,clip(item.SourceText,70),reason))
+		if err := s.db.WithContext(ctx).Where("draft_id=? AND page=? AND status='review_warning'", d.ID, current.Position).Order("segment_id ASC, CASE item_type WHEN 'sentence' THEN 0 ELSE 1 END, word_index ASC, id ASC").Find(&reviewItems).Error; err != nil {
+			return err
 		}
-		return translationIssuesError{Count:len(reviewItems),Details:details}
+		details := make([]string, 0, len(reviewItems))
+		clip := func(value string, limit int) string {
+			value = strings.TrimSpace(value)
+			r := []rune(value)
+			if len(r) <= limit {
+				return value
+			}
+			return string(r[:limit]) + "…"
+		}
+		for _, item := range reviewItems {
+			kind := "整句"
+			if item.ItemType == "word" {
+				kind = "单词"
+			}
+			reason := "需要人工核对"
+			if item.FailureReason != nil && strings.TrimSpace(*item.FailureReason) != "" {
+				reason = clip(*item.FailureReason, 180)
+			}
+			details = append(details, fmt.Sprintf("%s「%s」：%s", kind, clip(item.SourceText, 70), reason))
+		}
+		return translationIssuesError{Count: len(reviewItems), Details: details}
 	}
 	return nil
 }
@@ -2524,6 +2700,7 @@ func (s *EditorService) translateLocalItems(ctx context.Context, job *model.Text
 			"translation_model": modelID,
 			"checked":           false,
 			"audio_checked":     false,
+			"inherited_audio":   false,
 			"version":           gorm.Expr("version+1"),
 		}).Error; e != nil {
 		return e
@@ -2619,7 +2796,9 @@ func (s *EditorService) runLocalTranslationItem(ctx context.Context, request map
 			}
 			return response, errors.New(message)
 		}
-		if response.Task == "review_sentence" || response.Task == "review_word" { return response, nil }
+		if response.Task == "review_sentence" || response.Task == "review_word" {
+			return response, nil
+		}
 		if response.Task == "sentence" {
 			if strings.TrimSpace(response.Translation) == "" {
 				return response, errors.New("local sentence translation is empty")
@@ -2801,7 +2980,7 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			if e = tx.Model(&existing).Updates(map[string]any{"printed_page": page.PrintedPage, "title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "translation_model": page.TranslationModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			if e = tx.Model(&existing).Updates(map[string]any{"printed_page": page.PrintedPage, "title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "translation_model": page.TranslationModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
 			page.ID, page.Version = existing.ID, existing.Version+1
