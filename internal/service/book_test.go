@@ -115,7 +115,7 @@ func TestAvailableAccentsComeFromPublishedDatabaseState(t *testing.T) {
 	}
 }
 
-func TestBothEnabledAccentsAndLegacyCompatibility(t *testing.T) {
+func TestConfiguredAndLegacyAvailableAccents(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
 	book := model.Book{BookID: "both-book", Status: "published", AmericanEnabled: true, BritishEnabled: true, AmericanVoiceID: "aiden", BritishVoiceID: "ryan", AudioConfigVersion: 1}
 	repo := fakeRepository{books: []model.Book{book}}
@@ -126,10 +126,10 @@ func TestBothEnabledAccentsAndLegacyCompatibility(t *testing.T) {
 
 	book.AudioConfigVersion = 0
 	book.AmericanEnabled, book.BritishEnabled = false, false
-	repo = fakeRepository{books: []model.Book{book}}
+	repo = writeBookAudioFixture(t, resources, book, map[string]string{"en-US": "aiden"})
 	view, err = NewBookService(repo, resources).Get(context.Background(), book.BookID)
-	if err != nil || len(view.Audio.AvailableAccents) != 2 {
-		t.Fatalf("legacy audio settings stopped working: %#v %v", view.Audio, err)
+	if err != nil || len(view.Audio.AvailableAccents) != 1 || view.Audio.AvailableAccents[0] != "en-US" {
+		t.Fatalf("legacy accents should reflect generated audio: %#v %v", view.Audio, err)
 	}
 }
 

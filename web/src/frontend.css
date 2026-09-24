@@ -1,0 +1,40 @@
+/* xiaoV2-only controls layered over english's public-page styles. */
+.account-link{color:#45796d;text-decoration:none;font-size:14px}
+.account-link:hover{text-decoration:underline}
+.textbook-window{display:grid;place-items:center;color:#4b817c}
+.book-card .textbook-window img{width:100%;height:100%;max-width:none;object-fit:cover;transform:none}
+.empty-state{border:1px dashed #c9dccb;background:#f1f6ed;border-radius:20px;padding:28px;text-align:center;color:#5a7667}
+.empty-state>span{width:50px;height:50px;margin:auto;border-radius:16px;background:#dbece0;display:grid;place-items:center;color:#4d8a77}
+.empty-state h2{margin:20px 0 10px;font-size:22px;color:#355f55}
+.empty-state p{font-size:14px;line-height:1.8;color:#72877b}
+.empty-state button{border:0;border-radius:10px;padding:10px 12px;background:#fff;color:#568070}
+.shelf>.empty-state{padding:48px 28px}
+.reading-grid .study-column{min-width:0}
+.setting .choice-group{display:flex;gap:3px;padding:4px;border-radius:11px;background:#f1f4ec}
+.setting .choice-group button{display:flex;align-items:center;gap:4px;border:0;background:transparent;padding:9px 12px;border-radius:8px;font-size:14px;color:#76867d;white-space:nowrap}
+.setting .choice-group button.active{background:white;color:#377d6c;box-shadow:0 1px 5px #31492114}
+.setting .choice-group strong{padding:9px 12px;color:#76867d;font-size:14px;font-weight:500}
+.reader-heading .page-select{flex:1;min-width:0;max-width:none}
+.account-shell{display:block;min-height:100vh;background:#f4f8f5;padding:38px 24px}
+.account-shell>.admin-brand{display:block;max-width:900px;margin:0 auto 40px;color:#285d5d;font-size:23px}
+.account-shell>.admin-brand span{display:inline-block;margin:0 0 0 14px;font-size:13px;font-weight:400;letter-spacing:0;opacity:.75}
+.account-shell .account-card{width:min(470px,100%);max-width:470px;margin:0 auto;padding:36px;background:#fff;border:1px solid #e1e9e4;border-radius:24px;box-shadow:0 10px 35px #355f4f08}
+.account-card h1{font-size:28px;margin:0 0 26px}
+.account-card small{font-weight:400;color:#7a8b85}
+.account-mode-switch{display:flex;gap:10px;margin:4px 0 22px}
+.account-mode-switch button{flex:1;border:1px solid #cddcde;background:#f6f9fa;color:#397373;padding:11px 14px;border-radius:10px}
+.account-mode-switch button.active{background:#246e70;border-color:#246e70;color:#fff;font-weight:700}
+.account-shell .account-card label{display:grid;gap:8px;margin:14px 0;font-size:14px;font-weight:600}
+.account-shell .account-card input{min-width:0;width:100%;border:1px solid #cddcde;border-radius:9px;padding:11px 12px;background:#fff;color:#27404a}
+.account-shell .admin-primary{background:#246e70!important;color:#fff!important;padding:12px 20px;border-radius:10px;font-weight:700;margin-top:14px}
+.account-shell .admin-secondary{display:inline-block;margin:12px 8px 0 0;padding:12px;color:#246e70;text-decoration:none}
+.account-links{display:flex;gap:12px;margin-top:20px}
+.account-links button{border:0;background:none;color:#397373;padding:8px 0}
+.account-links button:hover{text-decoration:underline}
+@media(max-width:760px){
+  .account-link{font-size:13px}
+  .account-shell{padding:30px 20px}
+  .account-shell>.admin-brand{margin-bottom:32px}
+  .account-shell .account-card{padding:25px}
+  .setting .choice-group button{padding:9px 10px;font-size:13px}
+}
