@@ -51,13 +51,14 @@ function wordBoxFor(anchor: Anchor | undefined, index: number, total: number): [
 
 export default function DraftPageEditor({ content, image, draftId, page, editable, availableAccents, onChange, onCommit, onRegenerateAudio, onUploadAudio }: Props) {
   const [si, setSI] = useState(0), [wi, setWI] = useState(0), [accent, setAccent] = useState<Accent>("en-US"), [zoom, setZoom] = useState(false);
-  const [drag, setDrag] = useState<DragState | null>(null), [draw, setDraw] = useState<DrawState | null>(null);
+  const [draw, setDraw] = useState<DrawState | null>(null);
   const [draggedWord, setDraggedWord] = useState<{ segmentID: string; wordID: string } | null>(null), [wordDropIndex, setWordDropIndex] = useState<number | null>(null);
   const [draggedSegmentID, setDraggedSegmentID] = useState<string | null>(null), [segmentDropIndex, setSegmentDropIndex] = useState<number | null>(null);
   const [inlineSegmentID, setInlineSegmentID] = useState<string | null>(null), [savingInline, setSavingInline] = useState(false), [playing, setPlaying] = useState(""), [audioError, setAudioError] = useState("");
   const [regeneratingAudio, setRegeneratingAudio] = useState("");
   const [uploadingAudio, setUploadingAudio] = useState("");
   const surface = useRef<HTMLDivElement>(null), player = useRef<HTMLAudioElement | null>(null), interactionMoved = useRef(false);
+  const activeDrag = useRef<DragState | null>(null), lastPointerGesture = useRef<{ id: string; at: number; handled: boolean } | null>(null);
   const activeAccent = availableAccents.includes(accent) ? accent : availableAccents[0] || "en-US";
   const segments = content.segments || [], segment = segments[si], word = segment?.words[wi];
   const inlineSegment = inlineSegmentID ? segments.find((item) => item.id === inlineSegmentID) : null;
@@ -99,7 +100,10 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
     e.stopPropagation(); interactionMoved.current = false;
     const point = pointerPoint(e), item = segments[s];
     const values = kind === "anchor" || kind === "anchor-size" ? [...anchorWithSize(item.anchor)] : [...(item.words[w].box || [0.1, 0.1, 0.08, 0.03])];
-    setSI(s); setWI(w); setDrag({ kind, s, w, ...point, values, audioID }); surface.current?.setPointerCapture(e.pointerId);
+    const nextDrag = { kind, s, w, ...point, values, audioID };
+    activeDrag.current = nextDrag;
+    lastPointerGesture.current = null;
+    setSI(s); setWI(w); surface.current?.setPointerCapture(e.pointerId);
   }
   function beginDraw(e: React.PointerEvent) {
     if (!editable || !surface.current) return;
@@ -111,26 +115,28 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
     if (draw) {
       const point = pointerPoint(e); if (Math.abs(point.x - draw.x) > CLICK_MOVE_THRESHOLD || Math.abs(point.y - draw.y) > CLICK_MOVE_THRESHOLD) interactionMoved.current = true; setDraw({ ...draw, endX: point.x, endY: point.y }); return;
     }
-    if (!drag) return;
-    const point = pointerPoint(e), dx = point.x - drag.x, dy = point.y - drag.y;
+    const currentDrag = activeDrag.current;
+    if (!currentDrag) return;
+    const point = pointerPoint(e), dx = point.x - currentDrag.x, dy = point.y - currentDrag.y;
     if (Math.abs(dx) > CLICK_MOVE_THRESHOLD || Math.abs(dy) > CLICK_MOVE_THRESHOLD) interactionMoved.current = true;
     // Do not mutate OCR coordinates for normal click jitter. Previously even a
     // sub-threshold pointer move called onChange while pointerup still counted
     // as an audio click. The next page save then correctly saw changed content
     // and removed its now-stale audio, making preview appear to delete audio.
     if (!interactionMoved.current) return;
-    if (drag.kind === "anchor") { const item = segments[drag.s]; updateSegment(drag.s, { anchor: movedAnchor(item.anchor, drag.values[0] + dx, drag.values[1] + dy) }); return; }
-    const [x, y, width, height] = drag.values;
-    if (drag.kind === "anchor-size") {
-      updateSegment(drag.s, { anchor: [x, y, clamp(width + dx, 1 - x), clamp(height + dy, 1 - y)] });
+    if (currentDrag.kind === "anchor") { const item = segments[currentDrag.s]; updateSegment(currentDrag.s, { anchor: movedAnchor(item.anchor, currentDrag.values[0] + dx, currentDrag.values[1] + dy) }); return; }
+    const [x, y, width, height] = currentDrag.values;
+    if (currentDrag.kind === "anchor-size") {
+      updateSegment(currentDrag.s, { anchor: [x, y, clamp(width + dx, 1 - x), clamp(height + dy, 1 - y)] });
       return;
     }
-    const box: [number, number, number, number] = drag.kind === "size" ? [x, y, clamp(width + dx, 1 - x), clamp(height + dy, 1 - y)] : [clamp(x + dx, 1 - width), clamp(y + dy, 1 - height), width, height];
-    updateWord(drag.s, drag.w, { box, polygon: undefined });
+    const box: [number, number, number, number] = currentDrag.kind === "size" ? [x, y, clamp(width + dx, 1 - x), clamp(height + dy, 1 - y)] : [clamp(x + dx, 1 - width), clamp(y + dy, 1 - height), width, height];
+    updateWord(currentDrag.s, currentDrag.w, { box, polygon: undefined });
   }
   function finishPointer(e: React.PointerEvent) {
-    const audioID = drag?.audioID;
+    const audioID = activeDrag.current?.audioID;
     const shouldPlay = e.type === "pointerup" && Boolean(audioID) && !interactionMoved.current;
+    if (audioID) lastPointerGesture.current = { id: audioID, at: performance.now(), handled: !shouldPlay };
     if (draw) {
       const left = Math.min(draw.x, draw.endX), top = Math.min(draw.y, draw.endY), width = Math.abs(draw.endX - draw.x), height = Math.abs(draw.endY - draw.y);
       if (width >= 0.01 && height >= 0.01) {
@@ -139,12 +145,15 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       }
       setDraw(null);
     }
-    setDrag(null);
+    activeDrag.current = null;
     if (surface.current?.hasPointerCapture(e.pointerId)) surface.current.releasePointerCapture(e.pointerId);
     // Pointer capture deliberately retargets pointerup/click to the canvas so
     // dragging works outside a small OCR box. Start playback here for a real
     // click; waiting for the button's onClick makes the speaker appear dead.
-    if (shouldPlay && audioID) play(audioID);
+    if (shouldPlay && audioID) {
+      lastPointerGesture.current = { id: audioID, at: performance.now(), handled: true };
+      play(audioID);
+    }
     interactionMoved.current = false;
   }
   function stop() { player.current?.pause(); player.current = null; setPlaying(""); }
@@ -152,13 +161,22 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
     if (playing === id) { stop(); return; }
     stop(); setAudioError(""); if (!availableAccents.length) { setAudioError("当前页面没有启用可试听的口音"); return; }
     const audio = new Audio(`/api/v1/admin/drafts/${draftId}/pages/${page}/audio/${encodeURIComponent(id)}?accent=${activeAccent}`); player.current = audio;
-    audio.onplaying = () => setPlaying(id); audio.onended = () => setPlaying(""); audio.onerror = () => { setPlaying(""); setAudioError("音频尚未生成或无法播放"); };
-    void audio.play().catch(() => { setPlaying(""); setAudioError("音频尚未生成或无法播放"); });
+    audio.onplaying = () => { if (player.current === audio) setPlaying(id); };
+    audio.onended = () => { if (player.current === audio) { player.current = null; setPlaying(""); } };
+    audio.onerror = () => { if (player.current === audio) { player.current = null; setPlaying(""); setAudioError("音频尚未生成或无法播放"); } };
+    void audio.play().catch(() => { if (player.current === audio) { player.current = null; setPlaying(""); setAudioError("音频尚未生成或无法播放"); } });
   }
-  // Playback is independent from the coordinate editor. A pointer gesture
-  // may also move a hotspot, but releasing it must never make the speaker
-  // appear dead because a drag flag leaked into the following click.
-  function clickAudio(id: string) { interactionMoved.current = false; play(id); }
+  // A captured pointer may retarget its click to the canvas. If the click
+  // still reaches the hotspot, ignore a duplicate play or a completed drag.
+  function clickAudio(id: string, pointerClick: boolean) {
+    const previous = lastPointerGesture.current;
+    if (pointerClick && previous?.id === id && previous.handled && performance.now() - previous.at < 400) {
+      lastPointerGesture.current = null;
+      return;
+    }
+    interactionMoved.current = false;
+    play(id);
+  }
   async function regenerateAudio(itemId: string, targetAccent: Accent, kind: "sentence" | "word", text: string) {
     if (!onRegenerateAudio || regeneratingAudio) return;
     const key = `${itemId}:${targetAccent}`;
@@ -309,11 +327,11 @@ export default function DraftPageEditor({ content, image, draftId, page, editabl
       {segments.map((item, x) => { const anchor = boundedAnchor(item.anchor), selected = x === si; return <div key={item.id}>
         {selected && <div className="editor-segment-outline" style={{ left: `${anchor[0] * 100}%`, top: `${anchor[1] * 100}%`, width: `${anchor[2] * 100}%`, height: `${anchor[3] * 100}%` }} />}
         {selected && editable && <span className="editor-resize editor-segment-resize" title="拖动调整整句范围" style={{ left: `${(anchor[0] + anchor[2]) * 100}%`, top: `${(anchor[1] + anchor[3]) * 100}%` }} onPointerDown={(e) => begin(e, "anchor-size", x)} />}
-        {item.words.map((current, y) => current.box && <button type="button" key={current.id} className={`editor-box ${selected && y === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${hasSpellingErrorHint(current) ? " translation-spelling-review" : ""}${playing === current.id ? " playing" : ""}`} style={{ left: `${current.box[0] * 100}%`, top: `${current.box[1] * 100}%`, width: `${current.box[2] * 100}%`, height: `${current.box[3] * 100}%` }} onPointerDown={(e) => begin(e, "box", x, y, audioMode(item) === "none" ? undefined : current.id)} onClick={(e) => { if (audioMode(item) !== "none" && (!editable || e.detail === 0)) clickAudio(current.id); }} aria-label={audioMode(item) === "none" ? `选择 ${current.text || "单词"}` : `点读 ${current.text || "单词"}`}>
+        {item.words.map((current, y) => current.box && <button type="button" key={current.id} className={`editor-box ${selected && y === wi ? "active " : ""}${current.ocr_needs_review ? "ocr-review" : ""}${hasSpellingErrorHint(current) ? " translation-spelling-review" : ""}${playing === current.id ? " playing" : ""}`} style={{ left: `${current.box[0] * 100}%`, top: `${current.box[1] * 100}%`, width: `${current.box[2] * 100}%`, height: `${current.box[3] * 100}%` }} onPointerDown={(e) => begin(e, "box", x, y, audioMode(item) === "none" ? undefined : current.id)} onClick={(e) => { if (audioMode(item) !== "none") clickAudio(current.id, e.detail > 0); }} aria-label={audioMode(item) === "none" ? `选择 ${current.text || "单词"}` : `点读 ${current.text || "单词"}`}>
           {selected && y === wi && <span className="editor-overlay-delete word-delete" role="button" title="删除单词" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeWordAt(x, y); }}>×</span>}
           {selected && y === wi && <span className="editor-resize" onPointerDown={(e) => begin(e, "size", x, y)} />}
         </button>)}
-        {item.anchor && audioMode(item) === "sentence_and_words" && <button type="button" className={`editor-anchor ${item.words.length === 0 ? "missing-anchor" : ""}${playing === item.id ? " playing" : ""}`} title={item.words.length === 0 ? "新增片段：尚未定位，请拖到原图对应位置" : "点击播放整句，拖动调整位置"} style={{ left: `${anchor[0] * 100}%`, top: `${anchor[1] * 100}%` }} onPointerDown={(e) => begin(e, "anchor", x, 0, item.words.length ? item.id : undefined)} onClick={(e) => { setSI(x); setWI(0); if (item.words.length && (!editable || e.detail === 0)) clickAudio(item.id); }} aria-label={`选择 ${item.text || "整句"}`}>{item.words.length === 0 ? "未定位" : "♪"}</button>}
+        {item.anchor && audioMode(item) === "sentence_and_words" && <button type="button" className={`editor-anchor ${item.words.length === 0 ? "missing-anchor" : ""}${playing === item.id ? " playing" : ""}`} title={item.words.length === 0 ? "新增片段：尚未定位，请拖到原图对应位置" : "点击播放整句，拖动调整位置"} style={{ left: `${anchor[0] * 100}%`, top: `${anchor[1] * 100}%` }} onPointerDown={(e) => begin(e, "anchor", x, 0, item.words.length ? item.id : undefined)} onClick={(e) => { setSI(x); setWI(0); if (item.words.length) clickAudio(item.id, e.detail > 0); }} aria-label={`选择 ${item.text || "整句"}`}>{item.words.length === 0 ? "未定位" : "♪"}</button>}
         {selected && editable && <button type="button" className="editor-overlay-delete segment-delete" style={{ left: `${(anchor[0] + anchor[2]) * 100}%`, top: `${anchor[1] * 100}%` }} title="删除片段" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeSegmentAt(x); }}>×</button>}
       </div>; })}
       {inlineSegment && editable && (() => { const anchor = boundedAnchor(inlineSegment.anchor), inlineLeft = clampRange(anchor[0] + anchor[2] / 2, 0.18, 0.82), inlineTop = clampRange(anchor[1] + anchor[3] + 0.015, 0.02, 0.78); return <div className="editor-inline-editor" style={{ left: `${inlineLeft * 100}%`, top: `${inlineTop * 100}%` }} onPointerDown={(e) => e.stopPropagation()}>

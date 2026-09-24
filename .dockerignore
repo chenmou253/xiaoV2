@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+.venv
+.local
+.mysql
+storage
+web/node_modules
+web/dist
+*.log
+*.ses
+**/__pycache__
+**/*.pyc
