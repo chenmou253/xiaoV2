@@ -71,7 +71,7 @@ func (f fakeRepository) FindPage(_ context.Context, id string, page int) (model.
 
 func TestBookServiceListAndValidation(t *testing.T) {
 	resources, _ := resource.New(t.TempDir())
-	svc := NewBookService(fakeRepository{books: []model.Book{{BookID: "book-one", Title: "One", Status: "published", Cover: "pages/page-001.png"}}}, resources)
+	svc := NewBookService(fakeRepository{books: []model.Book{{BookID: "book-one", Title: "One", Status: "published", Cover: "pages/page-001.webp"}}}, resources)
 	books, err := svc.List(context.Background())
 	if err != nil || len(books) != 1 || books[0].BookID != "book-one" || books[0].Cover != "/api/v1/books/book-one/cover" {
 		t.Fatalf("unexpected list: %#v, %v", books, err)
@@ -91,7 +91,7 @@ func TestBookServiceReadsCanonicalPageMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "pages", "page-001.json"), []byte(`{"segments":[{"id":"s1","text":"Hello","words":[]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	repo := fakeRepository{books: []model.Book{{BookID: "book-one", Status: "published"}}, pages: []model.BookPage{{BookID: "book-one", Position: 1, ImagePath: "pages/page-001.png", ContentPath: "metadata/pages/page-001.json", Interactive: true}}}
+	repo := fakeRepository{books: []model.Book{{BookID: "book-one", Status: "published"}}, pages: []model.BookPage{{BookID: "book-one", Position: 1, ImagePath: "pages/page-001.webp", ContentPath: "metadata/pages/page-001.json", Interactive: true}}}
 	page, err := NewBookService(repo, resources).Page(context.Background(), "book-one", 1)
 	if err != nil || string(page.Segments) == "" || page.Meta.Position != 1 {
 		t.Fatalf("unexpected page: %#v, %v", page, err)

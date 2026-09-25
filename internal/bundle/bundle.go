@@ -92,20 +92,34 @@ func Export(db *gorm.DB, resources *resource.Manager, bookID, destination string
 		AmericanVoiceID: book.AmericanVoiceID, BritishVoiceID: book.BritishVoiceID,
 	}}
 	assets := map[string]bool{}
+	images := map[string]string{}
 	if book.Cover != "" {
-		assets[book.Cover] = true
+		images[resource.WebPPath(book.Cover)] = book.Cover
+		data.Book.Cover = resource.WebPPath(book.Cover)
 	}
 	for _, page := range pages {
+		imagePath := resource.WebPPath(page.ImagePath)
 		data.Pages = append(data.Pages, Page{
 			Position: page.Position, PrintedPage: page.PrintedPage, Title: page.Title,
-			Unit: page.Unit, Image: page.ImagePath, Content: page.ContentPath,
+			Unit: page.Unit, Image: imagePath, Content: page.ContentPath,
 			Interactive: page.Interactive, Preview: page.Preview,
 		})
-		assets[page.ImagePath], assets[page.ContentPath] = true, true
+		images[imagePath] = page.ImagePath
+		assets[page.ContentPath] = true
 	}
 	for relative := range assets {
 		if err = copyAsset(source, destination, relative); err != nil {
 			return err
+		}
+	}
+	for target, relative := range images {
+		imageSource, resolveErr := resources.Resolve(bookID, relative)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		imageTarget := filepath.Join(destination, filepath.FromSlash(target))
+		if err = resource.ConvertImageToWebP(imageSource, imageTarget); err != nil {
+			return fmt.Errorf("convert image %s: %w", relative, err)
 		}
 	}
 	for _, name := range []string{"tts", "audio"} {
@@ -186,22 +200,39 @@ func Import(db *gorm.DB, resources *resource.Manager, source string) (string, st
 		return "", "", err
 	}
 	defer os.RemoveAll(stage)
-	assets := map[string]bool{"metadata/book.json": true}
+	assets := map[string]bool{}
+	images := map[string]string{}
 	if data.Book.Cover != "" {
-		assets[data.Book.Cover] = true
+		original := data.Book.Cover
+		data.Book.Cover = resource.WebPPath(original)
+		images[data.Book.Cover] = original
 	}
-	for _, page := range data.Pages {
-		assets[page.Image], assets[page.Content] = true, true
+	for index := range data.Pages {
+		original := data.Pages[index].Image
+		data.Pages[index].Image = resource.WebPPath(original)
+		images[data.Pages[index].Image] = original
+		assets[data.Pages[index].Content] = true
 	}
 	for relative := range assets {
 		if err = copyAsset(source, stage, relative); err != nil {
 			return "", "", err
 		}
 	}
+	for target, relative := range images {
+		if err = resource.ConvertImageToWebP(
+			filepath.Join(source, filepath.FromSlash(relative)),
+			filepath.Join(stage, filepath.FromSlash(target)),
+		); err != nil {
+			return "", "", fmt.Errorf("convert image %s: %w", relative, err)
+		}
+	}
 	for _, name := range []string{"tts", "audio"} {
 		if err = copyAudioFiles(source, stage, name); err != nil {
 			return "", "", err
 		}
+	}
+	if err = writeManifest(stage, data); err != nil {
+		return "", "", err
 	}
 	if _, err = Validate(stage); err != nil {
 		return "", "", err

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -199,7 +200,11 @@ func (h *EditorHandler) Image(c *gin.Context) {
 		writePlatformError(c, e)
 		return
 	}
-	serveFile(c, path, "image/png")
+	contentType := "image/webp"
+	if detected := mime.TypeByExtension(strings.ToLower(filepath.Ext(path))); detected != "" {
+		contentType = detected
+	}
+	serveFile(c, path, contentType)
 }
 func (h *EditorHandler) Audio(c *gin.Context) {
 	p, ok := pageParam(c)
@@ -424,8 +429,8 @@ func (h *EditorHandler) SwitchModels(c *gin.Context) {
 		OCRModel         string `json:"ocr_model"`
 		TranslationModel string `json:"translation_model"`
 		TTSModel         string `json:"tts_model"`
-		TTSVoice string `json:"tts_voice"`
-		Version  uint64 `json:"version"`
+		TTSVoice         string `json:"tts_voice"`
+		Version          uint64 `json:"version"`
 	}
 	if !bindJSON(c, &in) {
 		return

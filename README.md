@@ -25,7 +25,7 @@ MySQL、`/data/books`、`/data/editor` 分别使用持久化卷。迁移已有�
 
 ```bash
 cd /Users/jiechen/xiaoV2
-brew install poppler python@3.12
+brew install poppler webp python@3.12
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements-ocr.txt
 .venv/bin/pip install -r requirements-audio.txt
@@ -88,7 +88,7 @@ storage/books/{book_id}/
 go run ./cmd/bookctl --publish import my-book
 ```
 
-PDF 转换需要本机 Poppler（`pdfinfo`、`pdftoppm`）。每一页先由 `pdftoppm` 以 300 DPI 渲染为最终 PNG；OCR 坐标归一化到该页面矩形（`[x,y,w,h]`），因而在任意屏幕尺寸都与 PNG 保持同一方向和位置。转换器优先检查 PDF 自带文本层；文本缺失或质量不合格时，使用常驻的 `ocr_daemon.py` 加载 PP-OCRv5 检测模型和 `PP-OCRv6_medium_rec` 识别模型，后续页面复用同一个模型进程，保留行和单词置信度、单词框并标记低置信度内容。OCR 会安全清洗引号、空白和省略号，过滤装饰性低置信度噪声，并把同段落中未以句末标点结束的视觉换行合并；标题、项目、表格和填空布局保持独立。管理后台的“一键补全翻译和音标”保留同一套整页 Prompt、JSON 协议、上下文词义、拼写复核和 General American IPA 规则。翻译模型可选百炼 `qwen3.7-flash`，也可选本地 `mlx-community/Qwen3-4B-Instruct-2507-4bit`。本地模型由 `translation_daemon.py` 常驻复用；云模型仍走 OpenAI-compatible API。两种后端都不自动重试。切换翻译模型只影响文字尚未确认的页面和后续页面，已确认文字页保留原翻译模型快照。首次 OCR 会联网下载模型到 `.local/paddlex`，后续复用缓存；本项目不再依赖 Tesseract。
+PDF 转换需要 Poppler（`pdfinfo`、`pdftoppm`）和 WebP 编码器 `cwebp`。每页由 `pdftoppm` 以 300 DPI 渲染为临时 PNG 供 OCR 使用，并在导入时转成质量 82 的 WebP；正式页面资源、发布结果和资源包统一引用 `.webp`。临时 PNG 不作为书页资源保留。OCR 坐标仍按相同页面矩形归一化（`[x,y,w,h]`），所以转换格式不改变文字位置。资源包导入和发布旧格式图片时也会转成 WebP。Ubuntu 可安装 `poppler-utils webp`，macOS 可执行 `brew install poppler webp`。转换器优先检查 PDF 自带文本层；文本缺失或质量不合格时，使用常驻的 `ocr_daemon.py` 加载 PP-OCRv5 检测模型和 `PP-OCRv6_medium_rec` 识别模型，后续页面复用同一个模型进程，保留行和单词置信度、单词框并标记低置信度内容。OCR 会安全清洗引号、空白和省略号，过滤装饰性低置信度噪声，并把同段落中未以句末标点结束的视觉换行合并；标题、项目、表格和填空布局保持独立。管理后台的“一键补全翻译和音标”保留同一套整页 Prompt、JSON 协议、上下文词义、拼写复核和 General American IPA 规则。翻译模型可选百炼 `qwen3.7-flash`，也可选本地 `mlx-community/Qwen3-4B-Instruct-2507-4bit`。本地模型由 `translation_daemon.py` 常驻复用；云模型仍走 OpenAI-compatible API。两种后端都不自动重试。切换翻译模型只影响文字尚未确认的页面和后续页面，已确认文字页保留原翻译模型快照。首次 OCR 会联网下载模型到 `.local/paddlex`，后续复用缓存；本项目不再依赖 Tesseract。
 
 本地翻译依赖随 `requirements-translate.txt` 安装（Apple Silicon macOS 才安装 `mlx-lm`）。首次使用会从 Hugging Face 下载模型并使用其缓存；可用 `TRANSLATION_LOCAL_MODEL_REPO` 覆盖仓库，默认 `mlx-community/Qwen3-4B-Instruct-2507-4bit`，可用 `LOCAL_TRANSLATION_MAX_TOKENS` 调整单次本地输出上限（默认 16384）。本地翻译与本地 Qwen3-TTS 互斥驻留：开始本地翻译前释放空闲 TTS daemon，开始音频任务前释放翻译 daemon，避免 16GB Apple Silicon 同时驻留两套 Qwen 模型。
 

@@ -51,6 +51,8 @@ function readableJobError(error: string) {
     return "服务器缺少 PDF 分析工具 pdfinfo（Poppler），任务尚未开始转换。";
   if (error.includes("required command is missing: pdftoppm"))
     return "服务器缺少 PDF 转图片工具 pdftoppm（Poppler），任务尚未开始转换。";
+  if (error.includes("required command is missing: cwebp"))
+    return "服务器缺少 WebP 图片编码工具 cwebp，请安装 webp 后重新排队。";
   if (error.includes("PaddleOCR is not installed"))
     return "服务器的项目 Python 环境尚未安装 PaddleOCR。";
   if (
@@ -1788,9 +1790,10 @@ function Drafts({
                       )}
                       {job.error.includes("Poppler") ||
                       job.error.includes("pdfinfo") ||
-                      job.error.includes("pdftoppm") ? (
+                      job.error.includes("pdftoppm") ||
+                      job.error.includes("cwebp") ? (
                         <p>
-                          macOS 可执行：<code>brew install poppler</code>
+                          macOS 可执行：<code>brew install poppler webp</code>
                           ，安装后重启服务，再点击“重新排队”。
                         </p>
                       ) : null}
