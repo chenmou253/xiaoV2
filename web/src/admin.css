@@ -18,4 +18,10 @@
 .draft-page-detail{flex:0 0 auto;border-top:1px solid #dce4de;padding:9px 5px 0;display:grid;gap:3px}
 .draft-page-detail strong{font-size:12px;color:#445b51}
 .draft-page-detail small{font-size:10px;color:#718178;overflow-wrap:anywhere}
+.page-layout-tools{border:1px solid #dce4de;border-radius:12px;padding:14px;margin:12px 0 18px;background:#f7faf7}
+.page-layout-tools .form-grid{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.page-layout-tools .form-grid button{align-self:end;border:0;border-radius:9px;background:#317f72;color:#fff;padding:11px 14px}
+.page-layout-tools .form-grid button:disabled{opacity:.5}
+.page-layout-fields{margin:12px 0}
+.draft-grid aside .draft-page-row{white-space:normal}
 @media(max-width:800px){.draft-page-sidebar{position:static;height:auto}.draft-page-list{max-height:320px}.draft-grid{grid-template-columns:1fr}}

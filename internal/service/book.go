@@ -20,6 +20,10 @@ var (
 	ErrNotFound      = errors.New("book not found")
 )
 
+func visiblePage(page model.BookPage) bool {
+	return page.PageGroup != "" && model.ValidPageGroup(page.PageGroup)
+}
+
 type Book struct {
 	BookID      string    `json:"book_id"`
 	Title       string    `json:"title"`
@@ -42,6 +46,8 @@ type PageSummary struct {
 	BookID      string `json:"book_id"`
 	Position    int    `json:"page"`
 	PrintedPage *int   `json:"printed_page"`
+	PageGroup   string `json:"page_group"`
+	PageLabel   string `json:"page_label"`
 	Title       string `json:"title"`
 	Unit        string `json:"unit"`
 	Image       string `json:"image"`
@@ -58,6 +64,8 @@ func (p PageContent) MarshalJSON() ([]byte, error) {
 	extra["book_id"] = p.Meta.BookID
 	extra["page"] = p.Meta.Position
 	extra["printed_page"] = p.Meta.PrintedPage
+	extra["page_group"] = p.Meta.PageGroup
+	extra["page_label"] = p.Meta.PageLabel
 	extra["title"] = p.Meta.Title
 	extra["unit"] = p.Meta.Unit
 	extra["image"] = p.Meta.Image
@@ -116,6 +124,9 @@ func (s *BookService) Pages(ctx context.Context, bookID string) ([]PageSummary, 
 	}
 	result := make([]PageSummary, 0, len(pages))
 	for _, page := range pages {
+		if !visiblePage(page) {
+			continue
+		}
 		result = append(result, s.toPage(page))
 	}
 	return result, nil
@@ -144,6 +155,9 @@ func (s *BookService) pageContent(ctx context.Context, bookID string, position i
 	}
 	if err != nil {
 		return PageContent{}, err
+	}
+	if !visiblePage(page) {
+		return PageContent{}, ErrNotFound
 	}
 	path, err := s.resources.Resolve(bookID, page.ContentPath)
 	if err != nil {
@@ -201,6 +215,9 @@ func (s *BookService) PageImageFile(ctx context.Context, bookID string, position
 	if err != nil {
 		return "", err
 	}
+	if !visiblePage(page) {
+		return "", ErrNotFound
+	}
 	return s.resources.Resolve(bookID, page.ImagePath)
 }
 
@@ -223,11 +240,15 @@ func (s *BookService) AudioFile(ctx context.Context, bookID string, position int
 	}
 	// Runtime audio lookup trusts the published database row plus the audio
 	// manifest. Do not read the whole page JSON just to validate one item.
-	if _, err = s.repository.FindPage(ctx, bookID, position); err != nil {
+	page, err := s.repository.FindPage(ctx, bookID, position)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return "", ErrNotFound
 		}
 		return "", err
+	}
+	if !visiblePage(page) {
+		return "", ErrNotFound
 	}
 	path, err := s.resources.AudioItemFile(bookID, position, itemID, accent)
 	if errors.Is(err, os.ErrNotExist) {
@@ -303,5 +324,5 @@ func bookAccentEnabled(item model.Book, accent string) bool {
 }
 
 func (s *BookService) toPage(page model.BookPage) PageSummary {
-	return PageSummary{BookID: page.BookID, Position: page.Position, PrintedPage: page.PrintedPage, Title: page.Title, Unit: page.Unit, Interactive: page.Interactive, Image: fmt.Sprintf("/api/v1/books/%s/pages/%d/image", url.PathEscape(page.BookID), page.Position)}
+	return PageSummary{BookID: page.BookID, Position: page.Position, PrintedPage: page.PrintedPage, PageGroup: page.PageGroup, PageLabel: page.PageLabel, Title: page.Title, Unit: page.Unit, Interactive: page.Interactive, Image: fmt.Sprintf("/api/v1/books/%s/pages/%d/image", url.PathEscape(page.BookID), page.Position)}
 }

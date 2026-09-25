@@ -533,8 +533,8 @@ def convert_page(args: argparse.Namespace, total: int, page: int,
     (dirs["metadata"] / "pages" / f"{stem}.json").write_text(
         json.dumps(content, ensure_ascii=False, indent=2) + "\n")
     image.unlink(missing_ok=True)
-    page_entry = {"page": page, "printed_page": None if page == 1 else page,
-                  "title": f"第 {page} 页", "unit": "", "image": f"pages/{webp_image.name}",
+    page_entry = {"page": page, "printed_page": None, "page_group": "", "page_label": "",
+                  "title": "", "unit": "", "image": f"pages/{webp_image.name}",
                   "content": content_relative,
                   "interactive": bool(segments)}
     manifest = {"schema_version": 1, "source_page_count": total,
@@ -661,8 +661,8 @@ def main() -> None:
         content = {"book_id": args.book_id, "page": page, "segments": segments,
                    "reviewed": False, "source": {"ocr": f"ocr/{stem}.json"}}
         (dirs["metadata"] / "pages" / f"{stem}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n")
-        pages.append({"page": page, "printed_page": None if page == 1 else page,
-                      "title": f"第 {page} 页", "unit": "", "image": f"pages/{webp_image.name}",
+        pages.append({"page": page, "printed_page": None, "page_group": "", "page_label": "",
+                      "title": "", "unit": "", "image": f"pages/{webp_image.name}",
                       "content": content_relative,
                       "interactive": bool(segments)})
         print(json.dumps({"page": page, "progress": page, "total": total}), flush=True)

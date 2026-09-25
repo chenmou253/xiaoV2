@@ -38,6 +38,8 @@ type manifest struct {
 	Pages []struct {
 		Position    int    `json:"page"`
 		PrintedPage *int   `json:"printed_page"`
+		PageGroup   string `json:"page_group"`
+		PageLabel   string `json:"page_label"`
 		Title       string `json:"title"`
 		Unit        string `json:"unit"`
 		Image       string `json:"image"`
@@ -160,7 +162,7 @@ func main() {
 	}
 	for index := range data.Pages {
 		page := &data.Pages[index]
-		if page.Position < 1 || page.Image == "" || page.Content == "" {
+		if page.Position < 1 || page.Image == "" || page.Content == "" || !model.ValidPageGroup(page.PageGroup) || len(page.PageLabel) > 80 || (page.PrintedPage != nil && *page.PrintedPage < 1) {
 			log.Fatalf("page %d has invalid metadata", page.Position)
 		}
 		originalImage := page.Image
@@ -248,7 +250,7 @@ func main() {
 			return err
 		}
 		for _, input := range data.Pages {
-			page := model.BookPage{BookID: bookID, Position: input.Position, PrintedPage: input.PrintedPage, Title: input.Title, Unit: input.Unit, ImagePath: input.Image, ContentPath: input.Content, Interactive: input.Interactive}
+			page := model.BookPage{BookID: bookID, Position: input.Position, PrintedPage: input.PrintedPage, PageGroup: input.PageGroup, PageLabel: input.PageLabel, Title: input.Title, Unit: input.Unit, ImagePath: input.Image, ContentPath: input.Content, Interactive: input.Interactive}
 			if err := tx.Create(&page).Error; err != nil {
 				return err
 			}

@@ -115,6 +115,16 @@ class AudioGenerator:
         normalized = normalized_word(item.text)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+    def _sentence_cache_key(self, item: AudioItem) -> str:
+        if item.kind != "sentence":
+            return ""
+        # Keep sentence reuse scoped to the same spoken text, model, accent,
+        # and voice.
+        # The cache itself lives under this book's tts directory.
+        source = " ".join(spoken_text(item.text).split())
+        value = "\0".join((source, self._model(), item.accent, item.voice))
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
     @staticmethod
     def _reusable_word(manifest: dict, output: Path, cache_key: str,
                        word: str) -> dict | None:
@@ -156,6 +166,58 @@ class AudioGenerator:
         temporary.replace(target)
         entry["file"] = relative.as_posix()
         entry["word_cache_key"] = cache_key
+        return entry
+
+    def _reusable_sentence(self, manifest: dict, output: Path, cache_key: str,
+                           item: AudioItem) -> dict | None:
+        if not cache_key:
+            return None
+        output_root = output.resolve()
+        source = " ".join(spoken_text(item.text).split())
+        for entry in manifest.get("items", []):
+            entry_source = " ".join(spoken_text(str(entry.get("text", ""))).split())
+            candidate_key = entry.get("sentence_cache_key")
+            if not candidate_key:
+                value = "\0".join((entry_source, str(entry.get("tts_model", "")),
+                                    str(entry.get("accent", "")), str(entry.get("voice", ""))))
+                candidate_key = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            if (entry.get("kind") != "sentence"
+                    or entry.get("status", "ready") != "ready"
+                    or candidate_key != cache_key
+                    or entry_source != source
+                    or str(entry.get("tts_model", "")) != self._model()
+                    or str(entry.get("accent", "")) != item.accent
+                    or str(entry.get("voice", "")) != item.voice
+                    or not entry.get("file")
+                    or not bool(entry.get("qa", {}).get("passed"))):
+                continue
+            target = (output / str(entry["file"])).resolve()
+            try:
+                target.relative_to(output_root)
+            except ValueError:
+                continue
+            try:
+                if target.is_file() and target.stat().st_size > 44:
+                    return entry
+            except OSError:
+                continue
+        return None
+
+    @staticmethod
+    def _promote_reusable_sentence(output: Path, entry: dict,
+                                   cache_key: str) -> dict:
+        relative = Path("sentence-cache") / cache_key[:2] / f"{cache_key}.wav"
+        if Path(str(entry["file"])) == relative:
+            entry["sentence_cache_key"] = cache_key
+            return entry
+        source = output / str(entry["file"])
+        target = output / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        shutil.copyfile(source, temporary)
+        temporary.replace(target)
+        entry["file"] = relative.as_posix()
+        entry["sentence_cache_key"] = cache_key
         return entry
 
     @staticmethod
@@ -213,11 +275,14 @@ class AudioGenerator:
 
     @staticmethod
     def _paths(output: Path, item: AudioItem, generation_id: str,
-               word_cache_key: str = "") -> tuple[Path, Path]:
+               word_cache_key: str = "", sentence_cache_key: str = "") -> tuple[Path, Path]:
         segment = f"{item.segment_index + 1:03d}-{_safe_component(item.segment_id, 'segment')}"
         accent = "us" if item.accent == "en-US" else "uk"
         if item.kind == "sentence":
-            relative = Path(f"page-{item.page:03d}") / "sentences" / segment / f"{accent}-{generation_id}.wav"
+            if sentence_cache_key:
+                relative = Path("sentence-cache") / sentence_cache_key[:2] / f"{sentence_cache_key}.wav"
+            else:
+                relative = Path(f"page-{item.page:03d}") / "sentences" / segment / f"{accent}-{generation_id}.wav"
         elif word_cache_key:
             relative = Path("word-cache") / word_cache_key[:2] / f"{word_cache_key}.wav"
         else:
@@ -332,6 +397,7 @@ class AudioGenerator:
                   "total": len(items), "passed": 0, "failed": 0})
         for index, item in enumerate(items, 1):
             word_cache_key = self._word_cache_key(item)
+            sentence_cache_key = self._sentence_cache_key(item)
             page_key = self._page_reuse_key(item)
             page_result = page_results.get(page_key)
             if page_result is not None:
@@ -364,6 +430,8 @@ class AudioGenerator:
                     }
                     if word_cache_key:
                         entry["word_cache_key"] = word_cache_key
+                    if sentence_cache_key:
+                        entry["sentence_cache_key"] = sentence_cache_key
                     self._replace_manifest_item(manifest, item, entry)
                     _atomic_json(manifest_path, manifest)
                     summary["passed"] += 1
@@ -427,13 +495,19 @@ class AudioGenerator:
 
             reusable = None
             if mode != "replace-item":
-                reusable = self._reusable_word(
-                    manifest, output, word_cache_key, normalized_word(item.text),
-                )
+                if word_cache_key:
+                    reusable = self._reusable_word(
+                        manifest, output, word_cache_key, normalized_word(item.text),
+                    )
+                elif sentence_cache_key:
+                    reusable = self._reusable_sentence(
+                        manifest, output, sentence_cache_key, item,
+                    )
             if reusable is not None:
-                reusable = self._promote_reusable_word(
-                    output, reusable, word_cache_key,
-                )
+                if word_cache_key:
+                    reusable = self._promote_reusable_word(output, reusable, word_cache_key)
+                else:
+                    reusable = self._promote_reusable_sentence(output, reusable, sentence_cache_key)
                 reused_qa = json.loads(json.dumps(reusable.get("qa", {})))
                 reused_qa.update({
                     "passed": True, "reused": True,
@@ -452,7 +526,6 @@ class AudioGenerator:
                     "generation_version": reusable.get("generation_version", ""),
                     "generated_at": reusable.get("generated_at", ""),
                     "status": "ready", "file": reusable["file"],
-                    "word_cache_key": word_cache_key,
                     "reused_from": {
                         "page": reusable.get("page"),
                         "item_id": reusable.get("item_id"),
@@ -460,6 +533,10 @@ class AudioGenerator:
                     },
                     "qa": reused_qa,
                 }
+                if word_cache_key:
+                    entry["word_cache_key"] = word_cache_key
+                if sentence_cache_key:
+                    entry["sentence_cache_key"] = sentence_cache_key
                 self._replace_manifest_item(manifest, item, entry)
                 _atomic_json(manifest_path, manifest)
                 summary["passed"] += 1
@@ -479,7 +556,7 @@ class AudioGenerator:
             # succeeds, so every existing reference immediately hears the new
             # pronunciation without creating per-item duplicates.
             final_path, relative_path = self._paths(
-                output, item, generation_id, word_cache_key,
+                output, item, generation_id, word_cache_key, sentence_cache_key,
             )
             final_path.parent.mkdir(parents=True, exist_ok=True)
             passed_result: dict | None = None
@@ -567,6 +644,8 @@ class AudioGenerator:
                 }
                 if word_cache_key:
                     entry["word_cache_key"] = word_cache_key
+                if sentence_cache_key:
+                    entry["sentence_cache_key"] = sentence_cache_key
                 self._replace_manifest_item(manifest, item, entry)
                 _atomic_json(manifest_path, manifest)
                 page_results[page_key] = {"status": "ready", "entry": entry}

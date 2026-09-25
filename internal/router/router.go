@@ -109,6 +109,7 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		admin.PUT("/drafts/:draftId", platform.Require("content.write"), editor.SaveMeta)
 		admin.PUT("/drafts/:draftId/models", platform.Require("content.write"), editor.SwitchModels)
 		admin.PUT("/drafts/:draftId/order", platform.Require("content.write"), editor.Order)
+		admin.PUT("/drafts/:draftId/page-layout", platform.Require("content.write"), editor.SavePageLayout)
 		admin.GET("/drafts/:draftId/pages/:page", platform.Require("content.read"), editor.Page)
 		admin.GET("/drafts/:draftId/pages/:page/image", platform.Require("content.read"), editor.Image)
 		admin.GET("/drafts/:draftId/pages/:page/audio/:itemId", platform.Require("content.read"), editor.Audio)

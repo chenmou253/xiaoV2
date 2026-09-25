@@ -272,6 +272,9 @@ type DraftPageView struct {
 	Content        map[string]any `json:"content"`
 	Title          string         `json:"title"`
 	Unit           string         `json:"unit"`
+	PrintedPage    *int           `json:"printed_page"`
+	PageGroup      string         `json:"page_group"`
+	PageLabel      string         `json:"page_label"`
 	Version        uint64         `json:"version"`
 	Preview        bool           `json:"preview"`
 	Checked        bool           `json:"checked"`
@@ -552,6 +555,7 @@ func (s *EditorService) PublishedPage(ctx context.Context, book string, pos int)
 		return nil, e
 	}
 	data["book_id"], data["page"], data["title"], data["unit"], data["preview"], data["version"] = book, pos, p.Title, p.Unit, p.Preview, p.Version
+	data["printed_page"], data["page_group"], data["page_label"] = p.PrintedPage, p.PageGroup, p.PageLabel
 	data["image"] = fmt.Sprintf("/api/v1/admin/books/%s/pages/%d/image", book, pos)
 	return data, nil
 }
@@ -651,7 +655,7 @@ func (s *EditorService) CopyPublished(ctx context.Context, book string, actor ui
 			if e != nil {
 				return e
 			}
-			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(storageRaw), Preview: p.Preview, Checked: true, AudioChecked: true, InheritedAudio: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
+			dp := model.TextbookDraftPage{DraftID: id, Position: p.Position, PrintedPage: p.PrintedPage, PageGroup: p.PageGroup, PageLabel: p.PageLabel, Title: p.Title, Unit: p.Unit, ImagePath: "published:" + p.ImagePath, Content: string(storageRaw), Preview: p.Preview, Checked: true, AudioChecked: true, InheritedAudio: true, OCRModel: models.OCRModel, TranslationModel: models.TranslationModel, TTSModel: models.TTSModel, TTSVoice: models.TTSVoice}
 			if e = tx.Create(&dp).Error; e != nil {
 				return e
 			}
@@ -711,7 +715,7 @@ func (s *EditorService) Get(ctx context.Context, id string) (DraftDetail, error)
 			return out, err
 		}
 	}
-	if e := s.db.WithContext(ctx).Select("id,draft_id,position,printed_page,title,unit,preview,checked,audio_checked,inherited_audio,ocr_model,tts_model,tts_voice,version,updated_at").Where("draft_id=?", id).Order("position").Find(&out.Pages).Error; e != nil {
+	if e := s.db.WithContext(ctx).Select("id,draft_id,position,printed_page,page_group,page_label,title,unit,preview,checked,audio_checked,inherited_audio,ocr_model,tts_model,tts_voice,version,updated_at").Where("draft_id=?", id).Order("position").Find(&out.Pages).Error; e != nil {
 		return out, e
 	}
 	e := s.db.WithContext(ctx).Where("draft_id=?", id).Order("id DESC").Limit(100).Find(&out.Jobs).Error
@@ -807,7 +811,11 @@ func (s *EditorService) Page(ctx context.Context, id string, pos int) (DraftPage
 		}
 		audioReady = ready
 	}
-	return DraftPageView{Content: content, Title: p.Title, Unit: p.Unit, Version: p.Version, Preview: p.Preview, Checked: p.Checked, AudioChecked: p.AudioChecked, InheritedAudio: p.InheritedAudio, AudioReady: audioReady, Image: fmt.Sprintf("/api/v1/admin/drafts/%s/pages/%d/image", id, pos), Issues: publicationIssues(content)}, nil
+	title := p.Title
+	if title == fmt.Sprintf("第 %d 页", p.Position) {
+		title = ""
+	}
+	return DraftPageView{Content: content, Title: title, Unit: p.Unit, PrintedPage: p.PrintedPage, PageGroup: p.PageGroup, PageLabel: p.PageLabel, Version: p.Version, Preview: p.Preview, Checked: p.Checked, AudioChecked: p.AudioChecked, InheritedAudio: p.InheritedAudio, AudioReady: audioReady, Image: fmt.Sprintf("/api/v1/admin/drafts/%s/pages/%d/image", id, pos), Issues: publicationIssues(content)}, nil
 }
 func (s *EditorService) Image(ctx context.Context, id string, pos int) (string, error) {
 	var p model.TextbookDraftPage
@@ -968,7 +976,70 @@ func samePageContentExceptSegmentOrder(stored, incoming map[string]any) bool {
 	return storedOK && incomingOK && bytes.Equal(storedRaw, incomingRaw)
 }
 
+type PageLayoutInput struct {
+	Version      uint64 `json:"version"`
+	Start        int    `json:"start"`
+	End          int    `json:"end"`
+	PageGroup    string `json:"page_group"`
+	Numbering    string `json:"numbering"`
+	PrintedStart *int   `json:"printed_start"`
+}
+
+// SavePageLayout changes only navigation metadata. Physical positions and
+// generated OCR, translations, and audio remain attached to their pages.
+func (s *EditorService) SavePageLayout(ctx context.Context, id string, input PageLayoutInput, actor uint64) error {
+	if input.Start < 1 || input.End < input.Start || !model.ValidPageGroup(input.PageGroup) {
+		return bad("页面范围或分组无效")
+	}
+	if input.Numbering != "keep" && input.Numbering != "clear" && input.Numbering != "sequence" {
+		return bad("页码设置无效")
+	}
+	if input.Numbering == "sequence" && (input.PrintedStart == nil || *input.PrintedStart < 1) {
+		return bad("请填写书内起始页码")
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var draft model.TextbookDraft
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&draft, "id=?", id).Error; err != nil {
+			return err
+		}
+		if draft.Version != input.Version || (draft.Status != "draft" && draft.Status != "failed") {
+			return conflict("草稿已更新或不处于编辑状态")
+		}
+		var pages []model.TextbookDraftPage
+		if err := tx.Where("draft_id=? AND position BETWEEN ? AND ?", id, input.Start, input.End).Order("position").Find(&pages).Error; err != nil {
+			return err
+		}
+		if len(pages) != input.End-input.Start+1 {
+			return bad("所选范围内有尚未导入的页面")
+		}
+		for _, page := range pages {
+			updates := map[string]any{"page_group": input.PageGroup, "version": gorm.Expr("version+1")}
+			switch input.Numbering {
+			case "clear":
+				updates["printed_page"], updates["page_label"] = nil, ""
+			case "sequence":
+				updates["printed_page"], updates["page_label"] = *input.PrintedStart+page.Position-input.Start, ""
+			}
+			if err := tx.Model(&page).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		updates := map[string]any{"version": gorm.Expr("version+1"), "updated_by": actor}
+		if draft.Status == "failed" {
+			updates["status"] = "draft"
+		}
+		if err := tx.Model(&draft).Updates(updates).Error; err != nil {
+			return err
+		}
+		return editorAudit(tx, actor, "draft.page.layout", id, input)
+	})
+}
+
 func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input DraftPageView, actor uint64) error {
+	input.PageLabel = strings.TrimSpace(input.PageLabel)
+	if !model.ValidPageGroup(input.PageGroup) || len(input.PageLabel) > 80 || (input.PrintedPage != nil && *input.PrintedPage < 1) {
+		return bad("页面分组或书内页码无效")
+	}
 	normalizeContentAnchors(input.Content)
 	if _, ok := input.Content["segments"].([]any); !ok {
 		return bad("页面缺少 segments")
@@ -1023,9 +1094,9 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 		if generationChanged {
 			input.Checked = false
 			input.AudioChecked = false
-		} else if d.SourceKind == "published" && (changed || p.Title != input.Title || p.Unit != input.Unit || p.Preview != input.Preview) {
-			// A metadata or segment-order edit still needs confirmation on this
-			// page, but unchanged audio remains inherited and playable.
+		} else if d.SourceKind == "published" && changed {
+			// A segment-order edit still needs confirmation on this page, but
+			// navigation metadata leaves OCR and inherited audio untouched.
 			input.Checked = false
 		}
 		// Cover images and separator pages can contain no OCR segments. They
@@ -1051,7 +1122,7 @@ func (s *EditorService) SavePage(ctx context.Context, id string, pos int, input 
 			// draft default; OCR provenance remains the last recognized model.
 			p.TTSModel, p.TTSVoice = draftModelSettings(d).TTSModel, draftModelSettings(d).TTSVoice
 		}
-		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "inherited_audio": keepInheritedAudio, "version": gorm.Expr("version+1")}
+		pageUpdates := map[string]any{"content": string(raw), "title": input.Title, "unit": input.Unit, "printed_page": input.PrintedPage, "page_group": input.PageGroup, "page_label": input.PageLabel, "preview": input.Preview, "checked": input.Checked, "audio_checked": input.AudioChecked, "inherited_audio": keepInheritedAudio, "version": gorm.Expr("version+1")}
 		if generationChanged {
 			pageUpdates["tts_model"], pageUpdates["tts_voice"] = p.TTSModel, p.TTSVoice
 		}
@@ -1258,11 +1329,21 @@ func (s *EditorService) Action(ctx context.Context, id, action, note string, ver
 			if d.SourcePageCount > 0 && len(pages) != d.SourcePageCount {
 				return bad(fmt.Sprintf("PDF 共 %d 页，尚未生成完毕", d.SourcePageCount))
 			}
+			visible := 0
 			for _, p := range pages {
+				if !model.ValidPageGroup(p.PageGroup) {
+					return bad(fmt.Sprintf("文件第 %d 页的页面分组无效", p.Position))
+				}
+				if p.PageGroup != "" {
+					visible++
+				}
 				inherited := inheritedPublishedAudio(d, p)
 				if !p.Checked || !p.AudioChecked || (!inherited && (len(s.pageTextReviewIssues(ctx, id, p.Position, p.Content)) > 0 || s.missingDraftAudio(d, p))) {
 					return bad(fmt.Sprintf("第%d页尚未完成正文或音频确认", p.Position))
 				}
+			}
+			if visible == 0 {
+				return bad("请先为至少一页设置页面分组；未分组页面不会在客户端展示")
 			}
 		}
 		if action == "publish" {
@@ -1777,9 +1858,16 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 		if e = os.WriteFile(filepath.Join(bookRoot, filepath.FromSlash(contentRel)), append(publishedRaw, '\n'), 0640); e != nil {
 			return e
 		}
-		newPages = append(newPages, model.BookPage{BookID: d.BookID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: imageRel, ContentPath: contentRel, Interactive: hasSegments(p.Content), Preview: p.Preview})
+		newPages = append(newPages, model.BookPage{BookID: d.BookID, Position: p.Position, PrintedPage: p.PrintedPage, PageGroup: p.PageGroup, PageLabel: p.PageLabel, Title: p.Title, Unit: p.Unit, ImagePath: imageRel, ContentPath: contentRel, Interactive: hasSegments(p.Content), Preview: p.Preview})
 	}
-	manifest := map[string]any{"schema_version": 1, "book": map[string]any{"book_id": d.BookID, "title": d.Title, "grade": d.Grade, "semester": d.Term, "publisher": d.Edition, "cover": newPages[0].ImagePath}, "pages": newPages}
+	cover := ""
+	for _, page := range newPages {
+		if page.PageGroup == model.PageGroupCover {
+			cover = page.ImagePath
+			break
+		}
+	}
+	manifest := map[string]any{"schema_version": 1, "book": map[string]any{"book_id": d.BookID, "title": d.Title, "grade": d.Grade, "semester": d.Term, "publisher": d.Edition, "cover": cover}, "pages": newPages}
 	manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 	if e = os.WriteFile(filepath.Join(bookRoot, "metadata", "book.json"), append(manifestJSON, '\n'), 0640); e != nil {
 		return e
@@ -1798,7 +1886,7 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 	if britishVoice == "" {
 		britishVoice = tts.DefaultBritishVoice
 	}
-	book := model.Book{BookID: d.BookID, Title: d.Title, Publisher: d.Edition, Grade: fmt.Sprint(d.Grade), Semester: d.Term, Cover: newPages[0].ImagePath, Status: "published", PageCount: len(newPages), AmericanEnabled: d.AmericanEnabled, BritishEnabled: d.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1}
+	book := model.Book{BookID: d.BookID, Title: d.Title, Publisher: d.Edition, Grade: fmt.Sprint(d.Grade), Semester: d.Term, Cover: cover, Status: "published", PageCount: len(newPages), AmericanEnabled: d.AmericanEnabled, BritishEnabled: d.BritishEnabled, AmericanVoiceID: americanVoice, BritishVoiceID: britishVoice, AudioConfigVersion: 1}
 	var existing model.Book
 	e = tx.Where("book_id=?", d.BookID).First(&existing).Error
 	if errors.Is(e, gorm.ErrRecordNotFound) {
@@ -2971,6 +3059,8 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 		Pages           []struct {
 			Position    int    `json:"page"`
 			PrintedPage *int   `json:"printed_page"`
+			PageGroup   string `json:"page_group"`
+			PageLabel   string `json:"page_label"`
 			Title       string `json:"title"`
 			Unit        string `json:"unit"`
 			Image       string `json:"image"`
@@ -3005,7 +3095,7 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(storageRaw), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TranslationModel: draftModelSettings(d).TranslationModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
+			page := model.TextbookDraftPage{DraftID: d.ID, Position: p.Position, PrintedPage: p.PrintedPage, PageGroup: p.PageGroup, PageLabel: p.PageLabel, Title: p.Title, Unit: p.Unit, ImagePath: filepath.ToSlash(filepath.Join("work", d.BookID, p.Image)), Content: string(storageRaw), Preview: p.Position == 1, OCRModel: draftModelSettings(d).OCRModel, TranslationModel: draftModelSettings(d).TranslationModel, TTSModel: draftModelSettings(d).TTSModel, TTSVoice: draftModelSettings(d).TTSVoice}
 			var existing model.TextbookDraftPage
 			e = tx.Where("draft_id=? AND position=?", d.ID, p.Position).First(&existing).Error
 			if errors.Is(e, gorm.ErrRecordNotFound) {
@@ -3024,7 +3114,9 @@ func (s *EditorService) importConverted(ctx context.Context, d model.TextbookDra
 			if e != nil {
 				return e
 			}
-			if e = tx.Model(&existing).Updates(map[string]any{"printed_page": page.PrintedPage, "title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "translation_model": page.TranslationModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; e != nil {
+			// Re-running OCR must retain page grouping and printed numbering
+			// already configured by the editor.
+			if e = tx.Model(&existing).Updates(map[string]any{"title": page.Title, "unit": page.Unit, "image_path": page.ImagePath, "content": page.Content, "preview": page.Preview, "ocr_model": page.OCRModel, "translation_model": page.TranslationModel, "tts_model": page.TTSModel, "tts_voice": page.TTSVoice, "checked": false, "audio_checked": false, "inherited_audio": false, "version": gorm.Expr("version+1")}).Error; e != nil {
 				return e
 			}
 			page.ID, page.Version = existing.ID, existing.Version+1

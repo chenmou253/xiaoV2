@@ -135,6 +135,8 @@ type TextbookDraftPage struct {
 	DraftID        string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
 	Position       int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
 	PrintedPage    *int   `json:"printed_page"`
+	PageGroup      string `gorm:"size:24;not null;default:''" json:"page_group"`
+	PageLabel      string `gorm:"size:80;not null;default:''" json:"page_label"`
 	Title          string `gorm:"size:255;not null" json:"title"`
 	Unit           string `gorm:"size:255;not null" json:"unit"`
 	ImagePath      string `gorm:"size:500;not null" json:"-"`
