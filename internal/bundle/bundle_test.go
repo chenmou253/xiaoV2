@@ -22,12 +22,12 @@ func fixture(t *testing.T) string {
 		}
 	}
 	data := Bundle{SchemaVersion: 2, Book: Book{
-		BookID: "grade-4-up", Title: "四年级上册", Cover: "pages/page-001.png",
+		BookID: "grade-4-up", Title: "四年级上册", Cover: "pages/page-001.webp",
 		AmericanEnabled: true, AmericanVoiceID: "aiden",
-	}, Pages: []Page{{Position: 1, Image: "pages/page-001.png", Content: "metadata/pages/page-001.json", Interactive: true}}}
+	}, Pages: []Page{{Position: 1, Image: "pages/page-001.webp", Content: "metadata/pages/page-001.json", Interactive: true}}}
 	raw, _ := json.Marshal(data)
 	write("metadata/book.json", string(raw))
-	write("pages/page-001.png", "image")
+	write("pages/page-001.webp", "image")
 	write("metadata/pages/page-001.json", `{"segments":[]}`)
 	write("tts/manifest.json", `{"schema_version":2,"items":[{"page":1,"item_id":"s1","accent":"en-US","file":"page-001/s1.wav"}]}`)
 	write("tts/page-001/s1.wav", "audio")

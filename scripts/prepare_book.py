@@ -26,6 +26,18 @@ def run(*args: str, timeout: int = 180) -> bytes:
     return subprocess.run(args, check=True, capture_output=True, timeout=timeout).stdout
 
 
+def render_page_images(pdf: Path, page: int, stem: str, dirs: dict[str, Path]) -> tuple[Path, Path]:
+    """Render a temporary PNG for OCR and persist only a quality-82 WebP page."""
+    ocr_image = dirs["cache"] / f"{stem}.ocr.png"
+    webp_image = dirs["pages"] / f"{stem}.webp"
+    ocr_image.unlink(missing_ok=True)
+    webp_image.unlink(missing_ok=True)
+    run("pdftoppm", "-f", str(page), "-l", str(page), "-r", "300",
+        "-singlefile", "-png", str(pdf), str(ocr_image.with_suffix("")))
+    run("cwebp", "-quiet", "-q", "82", str(ocr_image), "-o", str(webp_image))
+    return ocr_image, webp_image
+
+
 def text_layer(pdf: Path, page: int) -> list[dict]:
     if not shutil.which("pdftotext"):
         return []
@@ -51,7 +63,7 @@ def text_layer(pdf: Path, page: int) -> list[dict]:
             right = max(word["box"][0] + word["box"][2] for word in words)
             bottom = max(word["box"][1] + word["box"][3] for word in words)
             # These coordinates use the source PDF's page rectangle. Poppler
-            # renders that same rectangle into the final PNG without rotating
+            # renders that same rectangle into the final WebP without rotating
             # it, so normalized boxes land on the exact rendered page.
             rows.append({"text": " ".join(word["text"] for word in words), "confidence": 1.0,
                          "needs_review": False, "box": [left, top, right - left, bottom - top],
@@ -480,9 +492,7 @@ def convert_page(args: argparse.Namespace, total: int, page: int,
     dirs = ensure_book_tree(args.book_id)
     shutil.copy2(args.input, dirs["source"] / "original.pdf")
     stem = page_stem(page)
-    image = dirs["pages"] / f"{stem}.png"
-    run("pdftoppm", "-f", str(page), "-l", str(page), "-r", "300",
-        "-singlefile", "-png", str(args.input), str(image.with_suffix("")))
+    image, webp_image = render_page_images(args.input, page, stem, dirs)
     try:
         rows = text_layer(args.input, page)
     except (subprocess.CalledProcessError, ET.ParseError):
@@ -522,8 +532,9 @@ def convert_page(args: argparse.Namespace, total: int, page: int,
                "reviewed": False, "source": {"ocr": f"ocr/{stem}.json"}}
     (dirs["metadata"] / "pages" / f"{stem}.json").write_text(
         json.dumps(content, ensure_ascii=False, indent=2) + "\n")
+    image.unlink(missing_ok=True)
     page_entry = {"page": page, "printed_page": None if page == 1 else page,
-                  "title": f"第 {page} 页", "unit": "", "image": f"pages/{stem}.png",
+                  "title": f"第 {page} 页", "unit": "", "image": f"pages/{webp_image.name}",
                   "content": content_relative,
                   "interactive": bool(segments)}
     manifest = {"schema_version": 1, "source_page_count": total,
@@ -591,7 +602,7 @@ def main() -> None:
     validate_book_id(args.book_id)
     if not args.input.is_file():
         parser.error("--input must be an existing PDF")
-    for command in ("pdfinfo", "pdftoppm"):
+    for command in ("pdfinfo", "pdftoppm", "cwebp"):
         if not shutil.which(command):
             parser.error(f"required command is missing: {command}")
     info = run("pdfinfo", str(args.input)).decode(errors="replace")
@@ -612,9 +623,7 @@ def main() -> None:
     page_numbers = [args.page] if args.page is not None else range(1, total + 1)
     for page in page_numbers:
         stem = page_stem(page)
-        image = dirs["pages"] / f"{stem}.png"
-        run("pdftoppm", "-f", str(page), "-l", str(page), "-r", "300",
-            "-singlefile", "-png", str(args.input), str(image.with_suffix("")))
+        image, webp_image = render_page_images(args.input, page, stem, dirs)
         try:
             rows = text_layer(args.input, page)
         except (subprocess.CalledProcessError, ET.ParseError):
@@ -637,6 +646,7 @@ def main() -> None:
                                   "stage": "loading-paddleocr"}), flush=True)
                 paddle = PaddleOCREngine()
             rows, method = paddle.rows(image), "paddleocr-ppocrv5"
+        image.unlink(missing_ok=True)
         quality = {"pdf_text_reliable": reliable_text,
                    "review_word_count": sum(bool(word.get("needs_review"))
                                             for row in rows for word in row.get("words", []))}
@@ -652,7 +662,7 @@ def main() -> None:
                    "reviewed": False, "source": {"ocr": f"ocr/{stem}.json"}}
         (dirs["metadata"] / "pages" / f"{stem}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n")
         pages.append({"page": page, "printed_page": None if page == 1 else page,
-                      "title": f"第 {page} 页", "unit": "", "image": f"pages/{stem}.png",
+                      "title": f"第 {page} 页", "unit": "", "image": f"pages/{webp_image.name}",
                       "content": content_relative,
                       "interactive": bool(segments)})
         print(json.dumps({"page": page, "progress": page, "total": total}), flush=True)

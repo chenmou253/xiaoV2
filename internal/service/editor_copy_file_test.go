@@ -7,7 +7,7 @@ import (
 )
 
 func TestCopyFilePreservesSourceWhenPathsAreSame(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "page-001.png")
+	path := filepath.Join(t.TempDir(), "page-001.webp")
 	want := []byte("published page image")
 	if err := os.WriteFile(path, want, 0o600); err != nil {
 		t.Fatal(err)

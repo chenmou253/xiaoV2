@@ -153,11 +153,20 @@ func main() {
 	if data.SchemaVersion != 1 || data.Book.BookID != bookID || data.Book.Title == "" {
 		log.Fatal("manifest schema, book_id, or title is invalid")
 	}
-	for _, page := range data.Pages {
+	imageSources := map[string]string{}
+	if data.Book.Cover != "" {
+		imageSources[resource.WebPPath(data.Book.Cover)] = data.Book.Cover
+		data.Book.Cover = resource.WebPPath(data.Book.Cover)
+	}
+	for index := range data.Pages {
+		page := &data.Pages[index]
 		if page.Position < 1 || page.Image == "" || page.Content == "" {
 			log.Fatalf("page %d has invalid metadata", page.Position)
 		}
-		for _, relative := range []string{page.Image, page.Content} {
+		originalImage := page.Image
+		page.Image = resource.WebPPath(originalImage)
+		imageSources[page.Image] = originalImage
+		for _, relative := range []string{originalImage, page.Content} {
 			path, resolveErr := resources.Resolve(bookID, relative)
 			if resolveErr != nil {
 				log.Fatal(resolveErr)
@@ -166,6 +175,56 @@ func main() {
 				log.Fatalf("resource is missing: %s", filepath.ToSlash(relative))
 			}
 		}
+	}
+	if data.Book.Cover != "" {
+		coverSource, resolveErr := resources.Resolve(bookID, imageSources[data.Book.Cover])
+		if resolveErr != nil {
+			log.Fatal(resolveErr)
+		}
+		coverTarget, resolveErr := resources.Resolve(bookID, data.Book.Cover)
+		if resolveErr != nil {
+			log.Fatal(resolveErr)
+		}
+		if err = resource.ConvertImageToWebP(coverSource, coverTarget); err != nil {
+			log.Fatal(err)
+		}
+	}
+	for index := range data.Pages {
+		page := &data.Pages[index]
+		imageSource, resolveErr := resources.Resolve(bookID, imageSources[page.Image])
+		if resolveErr != nil {
+			log.Fatal(resolveErr)
+		}
+		imageTarget, resolveErr := resources.Resolve(bookID, page.Image)
+		if resolveErr != nil {
+			log.Fatal(resolveErr)
+		}
+		if err = resource.ConvertImageToWebP(imageSource, imageTarget); err != nil {
+			log.Fatal(err)
+		}
+	}
+	var manifestDocument map[string]any
+	if err = json.Unmarshal(raw, &manifestDocument); err != nil {
+		log.Fatal(err)
+	}
+	if bookFields, ok := manifestDocument["book"].(map[string]any); ok {
+		bookFields["cover"] = data.Book.Cover
+	}
+	if manifestPages, ok := manifestDocument["pages"].([]any); ok {
+		for index := range data.Pages {
+			if index < len(manifestPages) {
+				if pageFields, ok := manifestPages[index].(map[string]any); ok {
+					pageFields["image"] = data.Pages[index].Image
+				}
+			}
+		}
+	}
+	updatedManifest, err := json.MarshalIndent(manifestDocument, "", "  ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = os.WriteFile(manifestPath, append(updatedManifest, '\n'), 0640); err != nil {
+		log.Fatal(err)
 	}
 	db, err := database.Open(cfg)
 	if err != nil {

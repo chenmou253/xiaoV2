@@ -1761,8 +1761,8 @@ func (s *EditorService) publish(tx *gorm.DB, d model.TextbookDraft) error {
 		if imageInfo.Size() == 0 {
 			return fmt.Errorf("page %d image is empty", p.Position)
 		}
-		imageRel := fmt.Sprintf("pages/page-%03d.png", p.Position)
-		if e = copyFile(image, filepath.Join(bookRoot, filepath.FromSlash(imageRel))); e != nil {
+		imageRel := fmt.Sprintf("pages/page-%03d.webp", p.Position)
+		if e = resource.ConvertImageToWebP(image, filepath.Join(bookRoot, filepath.FromSlash(imageRel))); e != nil {
 			return e
 		}
 		contentRel := fmt.Sprintf("metadata/pages/page-%03d.json", p.Position)

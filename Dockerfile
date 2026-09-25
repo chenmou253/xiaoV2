@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/server ./cmd/serve
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/bookctl ./cmd/bookctl
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates webp && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /app/web /data/books /data/editor && \
     chown -R 10001:10001 /data
