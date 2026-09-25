@@ -494,15 +494,14 @@ class AudioGenerator:
                 continue
 
             reusable = None
-            if mode != "replace-item":
-                if word_cache_key:
-                    reusable = self._reusable_word(
-                        manifest, output, word_cache_key, normalized_word(item.text),
-                    )
-                elif sentence_cache_key:
-                    reusable = self._reusable_sentence(
-                        manifest, output, sentence_cache_key, item,
-                    )
+            if word_cache_key:
+                reusable = self._reusable_word(
+                    manifest, output, word_cache_key, normalized_word(item.text),
+                )
+            elif sentence_cache_key:
+                reusable = self._reusable_sentence(
+                    manifest, output, sentence_cache_key, item,
+                )
             if reusable is not None:
                 if word_cache_key:
                     reusable = self._promote_reusable_word(output, reusable, word_cache_key)
@@ -550,11 +549,10 @@ class AudioGenerator:
                 page_results[page_key] = {"status": "ready", "entry": entry}
                 continue
             # A word has one canonical audio file for the whole textbook.
-            # Explicit regeneration skips cache *reuse* above, but still writes
-            # back to the same shared word-cache path. temporary.replace()
-            # atomically removes/replaces the previous shared WAV after QA
-            # succeeds, so every existing reference immediately hears the new
-            # pronunciation without creating per-item duplicates.
+            # When no approved reusable entry exists, temporary.replace()
+            # atomically installs the newly generated WAV after QA succeeds,
+            # so every existing reference hears the new pronunciation without
+            # creating per-item duplicates.
             final_path, relative_path = self._paths(
                 output, item, generation_id, word_cache_key, sentence_cache_key,
             )
