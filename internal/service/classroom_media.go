@@ -87,7 +87,7 @@ func (s *ClassroomService) Join(ctx context.Context, kind string, id, lessonID u
 	if lesson.Status != "scheduled" && lesson.Status != "in_progress" {
 		return out, &AppError{403, 40310, "课程已经结束"}
 	}
-	if now.Before(lesson.ScheduledStartAt.Add(-10*time.Minute)) || !now.Before(lesson.ScheduledEndAt) {
+	if !s.canEnterLesson(now, lesson.ScheduledStartAt, lesson.ScheduledEndAt) {
 		return out, &AppError{403, 40310, "当前不在上课时间"}
 	}
 	if s.rtc.AppID == "" || s.rtc.Certificate == "" {

@@ -67,7 +67,7 @@ func main() {
 	}
 	u, _ := url.Parse(cfg.AppOrigin)
 	platformHandler := handler.NewPlatformHandler(platformService, u != nil && u.Scheme == "https")
-	engine := router.New(db, handler.NewBookHandler(bookService), cfg.WebRoot, cfg.GinMode, platformHandler, handler.NewEditorHandler(editorService), handler.NewClassroomHandler(classroomService), cfg.AppOrigin)
+	engine := router.New(db, handler.NewBookHandler(bookService), cfg.WebRoot, cfg.GinMode, platformHandler, handler.NewEditorHandler(editorService), handler.NewClassroomHandler(classroomService, cfg.EditorRoot), cfg.AppOrigin)
 	server := &http.Server{Addr: cfg.Addr, Handler: engine, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 300 * time.Second, WriteTimeout: 310 * time.Second, IdleTimeout: 60 * time.Second}
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

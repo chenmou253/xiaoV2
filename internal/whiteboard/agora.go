@@ -18,6 +18,15 @@ type Agora struct {
 	HTTP                                        *http.Client
 }
 
+type httpStatusError struct {
+	status int
+	body   string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("whiteboard HTTP %d: %s", e.status, e.body)
+}
+
 func (a Agora) configured() bool {
 	return a.AppIdentifier != "" && a.AccessKey != "" && a.SecretKey != "" && a.Region != ""
 }
@@ -57,7 +66,7 @@ func (a Agora) request(ctx context.Context, method, path, token string, payload 
 		return nil, e
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("whiteboard HTTP %d: %s", response.StatusCode, string(b))
+		return nil, &httpStatusError{status: response.StatusCode, body: string(b)}
 	}
 	return b, nil
 }
@@ -134,5 +143,11 @@ func (a Agora) DisableRoom(ctx context.Context, uuid string) error {
 		return e
 	}
 	_, e = a.request(ctx, http.MethodPatch, "/rooms/"+url.PathEscape(uuid), token, map[string]any{"isBan": true})
+	var statusErr *httpStatusError
+	if errors.As(e, &statusErr) && statusErr.status == http.StatusNotFound {
+		// Closing an already missing room is idempotent. This also clears stale
+		// room records after a whiteboard project region has been changed.
+		return nil
+	}
 	return e
 }

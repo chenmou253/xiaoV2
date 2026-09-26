@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,32 +12,33 @@ import (
 )
 
 type Config struct {
-	Addr                    string
-	MySQLHost               string
-	MySQLPort               string
-	MySQLUser               string
-	MySQLPassword           string
-	MySQLDatabase           string
-	ResourceRoot            string
-	WebRoot                 string
-	GinMode                 string
-	AppOrigin               string
-	DevMailDir              string
-	SMTPHost                string
-	SMTPPort                string
-	SMTPUser                string
-	SMTPPassword            string
-	SMTPFrom                string
-	AdminEmail              string
-	AdminPassword           string
-	EditorRoot              string
-	Python                  string
-	AgoraAppID              string
-	AgoraAppCertificate     string
-	WhiteboardAppIdentifier string
-	WhiteboardAccessKey     string
-	WhiteboardSecretKey     string
-	WhiteboardRegion        string
+	Addr                     string
+	MySQLHost                string
+	MySQLPort                string
+	MySQLUser                string
+	MySQLPassword            string
+	MySQLDatabase            string
+	ResourceRoot             string
+	WebRoot                  string
+	GinMode                  string
+	AppOrigin                string
+	DevMailDir               string
+	SMTPHost                 string
+	SMTPPort                 string
+	SMTPUser                 string
+	SMTPPassword             string
+	SMTPFrom                 string
+	AdminEmail               string
+	AdminPassword            string
+	EditorRoot               string
+	Python                   string
+	AgoraAppID               string
+	AgoraAppCertificate      string
+	WhiteboardAppIdentifier  string
+	WhiteboardAccessKey      string
+	WhiteboardSecretKey      string
+	WhiteboardRegion         string
+	ClassroomDebugEarlyEntry bool
 }
 
 func Load() (Config, error) {
@@ -74,6 +76,9 @@ func Load() (Config, error) {
 		WhiteboardSecretKey:     strings.TrimSpace(os.Getenv("AGORA_WHITEBOARD_SECRET_KEY")),
 		WhiteboardRegion:        value("AGORA_WHITEBOARD_REGION", "sg"),
 	}
+	// This debugging override is deliberately available only when the server
+	// listens on the local machine. It must never be enabled on a public bind.
+	cfg.ClassroomDebugEarlyEntry = strings.EqualFold(strings.TrimSpace(os.Getenv("CLASSROOM_DEBUG_ALLOW_EARLY_ENTRY")), "true") && isLoopbackAddr(cfg.Addr)
 	if strings.ContainsAny(cfg.MySQLDatabase, "`/\\\x00") || cfg.MySQLDatabase == "" {
 		return Config{}, fmt.Errorf("MYSQL_DATABASE is invalid")
 	}
@@ -90,6 +95,18 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func loadEnvFile(path string) error {

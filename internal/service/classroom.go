@@ -22,13 +22,24 @@ import (
 )
 
 const lessonDuration = 30
+const defaultBreakMinutes = 15
 const lessonGraceSeconds = 60
+const classroomTimezone = "Asia/Shanghai"
+
+func validLessonDuration(minutes int) bool {
+	return minutes >= 15 && minutes <= 180
+}
+
+func validBreakMinutes(minutes int) bool {
+	return minutes >= 10 && minutes <= 60
+}
 
 type ClassroomService struct {
-	db         *gorm.DB
-	platform   *PlatformService
-	rtc        rtc.Agora
-	whiteboard whiteboard.Agora
+	db                   *gorm.DB
+	platform             *PlatformService
+	rtc                  rtc.Agora
+	whiteboard           whiteboard.Agora
+	debugAllowEarlyEntry bool
 }
 
 func classroomAudit(tx *gorm.DB, actor uint64, action string, target uint64, detail any) error {
@@ -49,32 +60,48 @@ func duplicateKey(err error) bool {
 
 func NewClassroomService(db *gorm.DB, platform *PlatformService) *ClassroomService {
 	cfg := platform.cfg
-	return &ClassroomService{db: db, platform: platform, rtc: rtc.Agora{AppID: cfg.AgoraAppID, Certificate: cfg.AgoraAppCertificate}, whiteboard: whiteboard.Agora{AppIdentifier: cfg.WhiteboardAppIdentifier, AccessKey: cfg.WhiteboardAccessKey, SecretKey: cfg.WhiteboardSecretKey, Region: cfg.WhiteboardRegion}}
+	return &ClassroomService{db: db, platform: platform, rtc: rtc.Agora{AppID: cfg.AgoraAppID, Certificate: cfg.AgoraAppCertificate}, whiteboard: whiteboard.Agora{AppIdentifier: cfg.WhiteboardAppIdentifier, AccessKey: cfg.WhiteboardAccessKey, SecretKey: cfg.WhiteboardSecretKey, Region: cfg.WhiteboardRegion}, debugAllowEarlyEntry: cfg.ClassroomDebugEarlyEntry}
+}
+
+func (s *ClassroomService) canEnterLesson(now, start, end time.Time) bool {
+	return now.Before(end) && (s.debugAllowEarlyEntry || !now.Before(start.Add(-10*time.Minute)))
 }
 
 type TeacherInput struct {
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Avatar      string `json:"avatar"`
-	Country     string `json:"country"`
-	Timezone    string `json:"timezone"`
-	Bio         string `json:"bio"`
-	Active      *bool  `json:"active"`
+	Email                 string `json:"email"`
+	DisplayName           string `json:"display_name"`
+	Avatar                string `json:"avatar"`
+	Country               string `json:"country"`
+	Timezone              string `json:"timezone"`
+	LessonDurationMinutes int    `json:"lesson_duration_minutes"`
+	BreakMinutes          int    `json:"break_minutes"`
+	Bio                   string `json:"bio"`
+	Active                *bool  `json:"active"`
 }
 
-func validTimezone(name string) bool {
-	if name == "" {
-		return false
-	}
-	_, err := time.LoadLocation(name)
-	return err == nil
+func mustClassroomLocation() *time.Location {
+	loc, _ := time.LoadLocation(classroomTimezone)
+	return loc
 }
 
 func (s *ClassroomService) CreateTeacher(ctx context.Context, in TeacherInput, actor uint64) (model.Teacher, error) {
 	in.Email = normalizeEmail(in.Email)
 	in.DisplayName = strings.TrimSpace(in.DisplayName)
-	if in.Email == "" || in.DisplayName == "" || !validTimezone(in.Timezone) {
-		return model.Teacher{}, bad("请填写有效的邮箱、姓名和时区")
+	if in.LessonDurationMinutes == 0 {
+		in.LessonDurationMinutes = lessonDuration
+	}
+	if in.BreakMinutes == 0 {
+		in.BreakMinutes = defaultBreakMinutes
+	}
+	if in.Email == "" || in.DisplayName == "" {
+		return model.Teacher{}, bad("请填写有效的邮箱和姓名")
+	}
+	in.Timezone = classroomTimezone
+	if !validLessonDuration(in.LessonDurationMinutes) {
+		return model.Teacher{}, bad("每节课时长必须为 15 到 180 分钟之间的整数")
+	}
+	if !validBreakMinutes(in.BreakMinutes) {
+		return model.Teacher{}, bad("课间休息必须为 10 到 60 分钟之间的整数")
 	}
 	if len(in.DisplayName) > 120 || len(in.Country) > 80 || len(in.Bio) > 4000 {
 		return model.Teacher{}, bad("外教资料过长")
@@ -87,7 +114,7 @@ func (s *ClassroomService) CreateTeacher(ctx context.Context, in TeacherInput, a
 	if err != nil {
 		return model.Teacher{}, err
 	}
-	teacher := model.Teacher{Email: in.Email, PasswordHash: string(hash), DisplayName: in.DisplayName, Avatar: in.Avatar, Country: in.Country, Timezone: in.Timezone, Bio: in.Bio, Verified: false, Active: true}
+	teacher := model.Teacher{Email: in.Email, PasswordHash: string(hash), DisplayName: in.DisplayName, Avatar: in.Avatar, Country: in.Country, Timezone: in.Timezone, LessonDurationMinutes: in.LessonDurationMinutes, BreakMinutes: in.BreakMinutes, Bio: in.Bio, Verified: false, Active: true}
 	if err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if e := tx.Create(&teacher).Error; e != nil {
 			return e
@@ -113,7 +140,8 @@ func (s *ClassroomService) CreateTeacher(ctx context.Context, in TeacherInput, a
 func (s *ClassroomService) Teachers(ctx context.Context, public bool) ([]model.Teacher, error) {
 	q := s.db.WithContext(ctx).Model(&model.Teacher{}).Order("id DESC")
 	if public {
-		q = q.Where("active = ? AND verified = ?", true, true)
+		q = q.Where("active = ? AND verified = ?", true, true).
+			Where("id IN (?)", s.db.Model(&model.TeacherAvailability{}).Select("teacher_id").Where("active = ?", true))
 	}
 	rows := make([]model.Teacher, 0)
 	if err := q.Find(&rows).Error; err != nil {
@@ -128,11 +156,45 @@ func (s *ClassroomService) Teacher(ctx context.Context, id uint64) (model.Teache
 	return row, err
 }
 
-func (s *ClassroomService) UpdateTeacher(ctx context.Context, id uint64, in TeacherInput, actor uint64) (model.Teacher, error) {
-	if in.Timezone != "" && !validTimezone(in.Timezone) {
-		return model.Teacher{}, bad("时区无效")
+type ScheduleConflict struct {
+	PreviousLessonID uint64    `json:"previous_lesson_id"`
+	NextLessonID     uint64    `json:"next_lesson_id"`
+	PreviousEndAt    time.Time `json:"previous_end_at"`
+	NextStartAt      time.Time `json:"next_start_at"`
+	GapMinutes       int       `json:"gap_minutes"`
+	RequiredMinutes  int       `json:"required_minutes"`
+}
+
+func (s *ClassroomService) TeacherScheduleConflicts(ctx context.Context, teacherID uint64, proposedBreakMinutes int) ([]ScheduleConflict, error) {
+	teacher, err := s.Teacher(ctx, teacherID)
+	if err != nil {
+		return nil, err
 	}
-	if len(in.DisplayName) > 120 || len(in.Country) > 80 || len(in.Bio) > 4000 || len(in.Avatar) > 500 || (in.DisplayName != "" && strings.TrimSpace(in.DisplayName) == "") {
+	breakMinutes := teacher.BreakMinutes
+	if proposedBreakMinutes != 0 {
+		breakMinutes = proposedBreakMinutes
+	}
+	if !validBreakMinutes(breakMinutes) {
+		return nil, bad("课间休息必须为 10 到 60 分钟之间的整数")
+	}
+	var lessons []model.Lesson
+	err = s.db.WithContext(ctx).Where("teacher_id = ? AND status IN ? AND scheduled_end_at > ?", teacherID, []string{"scheduled", "in_progress"}, time.Now().UTC()).Order("scheduled_start_at, id").Find(&lessons).Error
+	if err != nil {
+		return nil, err
+	}
+	conflicts := make([]ScheduleConflict, 0)
+	for i := 1; i < len(lessons); i++ {
+		previous, next := lessons[i-1], lessons[i]
+		gap := int(next.ScheduledStartAt.Sub(previous.ScheduledEndAt) / time.Minute)
+		if gap < breakMinutes {
+			conflicts = append(conflicts, ScheduleConflict{PreviousLessonID: previous.ID, NextLessonID: next.ID, PreviousEndAt: previous.ScheduledEndAt, NextStartAt: next.ScheduledStartAt, GapMinutes: gap, RequiredMinutes: breakMinutes})
+		}
+	}
+	return conflicts, nil
+}
+
+func (s *ClassroomService) UpdateTeacher(ctx context.Context, id uint64, in TeacherInput, actor uint64) (model.Teacher, error) {
+	if (in.LessonDurationMinutes != 0 && !validLessonDuration(in.LessonDurationMinutes)) || (in.BreakMinutes != 0 && !validBreakMinutes(in.BreakMinutes)) || len(in.DisplayName) > 120 || len(in.Country) > 80 || len(in.Bio) > 4000 || len(in.Avatar) > 500 || (in.DisplayName != "" && strings.TrimSpace(in.DisplayName) == "") {
 		return model.Teacher{}, bad("外教资料无效或过长")
 	}
 	updates := map[string]any{}
@@ -142,8 +204,12 @@ func (s *ClassroomService) UpdateTeacher(ctx context.Context, id uint64, in Teac
 	if in.Country != "" {
 		updates["country"] = in.Country
 	}
-	if in.Timezone != "" {
-		updates["timezone"] = in.Timezone
+	updates["timezone"] = classroomTimezone
+	if in.LessonDurationMinutes != 0 {
+		updates["lesson_duration_minutes"] = in.LessonDurationMinutes
+	}
+	if in.BreakMinutes != 0 {
+		updates["break_minutes"] = in.BreakMinutes
 	}
 	if in.Bio != "" {
 		updates["bio"] = in.Bio
@@ -162,10 +228,8 @@ func (s *ClassroomService) UpdateTeacher(ctx context.Context, id uint64, in Teac
 		if err := tx.Model(&row).Updates(updates).Error; err != nil {
 			return err
 		}
-		if in.Timezone != "" && in.Timezone != row.Timezone {
-			if err := tx.Model(&model.TeacherAvailability{}).Where("teacher_id = ?", id).Update("timezone", in.Timezone).Error; err != nil {
-				return err
-			}
+		if err := tx.Model(&model.TeacherAvailability{}).Where("teacher_id = ?", id).Update("timezone", classroomTimezone).Error; err != nil {
+			return err
 		}
 		if in.Active != nil && !*in.Active {
 			if err := tx.Where("account_id = ?", id).Delete(&model.TeacherSession{}).Error; err != nil {
@@ -194,8 +258,8 @@ func (s *ClassroomService) ReplaceAvailability(ctx context.Context, teacherID ui
 	}
 	for i := range rows {
 		v := &rows[i]
-		if v.Weekday < 0 || v.Weekday > 6 || v.StartMinute < 0 || v.EndMinute > 1440 || v.StartMinute >= v.EndMinute || v.StartMinute%30 != 0 || v.EndMinute%30 != 0 {
-			return bad("开放时间必须是同一天内的半小时区间")
+		if v.Weekday < 0 || v.Weekday > 6 || v.StartMinute < 0 || v.EndMinute > 1440 || v.StartMinute >= v.EndMinute || v.StartMinute%15 != 0 || v.EndMinute%15 != 0 {
+			return bad("开放时间必须是同一天内的 15 分钟刻度区间")
 		}
 		for j := 0; j < i; j++ {
 			if rows[j].Weekday == v.Weekday && rows[j].StartMinute < v.EndMinute && rows[j].EndMinute > v.StartMinute {
@@ -214,7 +278,7 @@ func (s *ClassroomService) ReplaceAvailability(ctx context.Context, teacherID ui
 		for i := range rows {
 			rows[i].ID = 0
 			rows[i].TeacherID = teacherID
-			rows[i].Timezone = teacher.Timezone
+			rows[i].Timezone = classroomTimezone
 			rows[i].Active = true
 		}
 		if len(rows) > 0 {
@@ -269,7 +333,7 @@ func (s *ClassroomService) StudentProfile(ctx context.Context, studentID uint64)
 }
 
 func (s *ClassroomService) SaveStudentProfile(ctx context.Context, studentID uint64, p model.StudentProfile) (model.StudentProfile, error) {
-	if !validTimezone(p.Timezone) || p.Grade < 0 || p.Grade > 12 || len(p.DisplayName) > 120 || len(p.Avatar) > 500 || len(p.ParentName) > 120 || len(p.ParentEmail) > 254 {
+	if p.Grade < 0 || p.Grade > 12 || len(p.DisplayName) > 120 || len(p.Avatar) > 500 || len(p.ParentName) > 120 || len(p.ParentEmail) > 254 {
 		return model.StudentProfile{}, bad("学生资料无效")
 	}
 	if p.ParentEmail != "" {
@@ -278,6 +342,7 @@ func (s *ClassroomService) SaveStudentProfile(ctx context.Context, studentID uin
 		}
 	}
 	p.StudentID = studentID
+	p.Timezone = classroomTimezone
 	err := s.db.WithContext(ctx).Save(&p).Error
 	return p, err
 }
@@ -288,17 +353,29 @@ type Slot struct {
 	Available bool      `json:"available"`
 }
 
-func withinAvailability(start, end time.Time, rows []model.TeacherAvailability) bool {
+type availabilityWindow struct {
+	weekday     int
+	startMinute int
+	endMinute   int
+	location    *time.Location
+}
+
+func prepareAvailability(rows []model.TeacherAvailability) []availabilityWindow {
+	windows := make([]availabilityWindow, 0, len(rows))
 	for _, a := range rows {
 		if !a.Active {
 			continue
 		}
-		loc, err := time.LoadLocation(a.Timezone)
-		if err != nil {
-			continue
-		}
-		localStart, localEnd := start.In(loc), end.In(loc)
-		if int(localStart.Weekday()) != a.Weekday {
+		loc := mustClassroomLocation()
+		windows = append(windows, availabilityWindow{a.Weekday, a.StartMinute, a.EndMinute, loc})
+	}
+	return windows
+}
+
+func withinAvailability(start, end time.Time, windows []availabilityWindow, cycleMinutes int) bool {
+	for _, a := range windows {
+		localStart, localEnd := start.In(a.location), end.In(a.location)
+		if int(localStart.Weekday()) != a.weekday {
 			continue
 		}
 		minute := localStart.Hour()*60 + localStart.Minute()
@@ -309,16 +386,40 @@ func withinAvailability(start, end time.Time, rows []model.TeacherAvailability) 
 			}
 			endMinute = 1440
 		}
-		if minute >= a.StartMinute && endMinute <= a.EndMinute && minute%30 == 0 {
+		if minute >= a.startMinute && endMinute <= a.endMinute && (cycleMinutes == 0 || (minute-a.startMinute)%cycleMinutes == 0) {
 			return true
 		}
 	}
 	return false
 }
 
-func overlaps(start, end time.Time, lessons []model.Lesson) bool {
-	for _, l := range lessons {
-		if start.Before(l.ScheduledEndAt) && end.After(l.ScheduledStartAt) {
+// Generate fixed starts from each availability window and keep the teacher's
+// rest interval between starts, including across adjacent windows and days.
+func scheduledSlots(from, until time.Time, windows []availabilityWindow, durationMinutes, breakMinutes int) []Slot {
+	result := make([]Slot, 0)
+	length := time.Duration(durationMinutes) * time.Minute
+	breakTime := time.Duration(breakMinutes) * time.Minute
+	cycleMinutes := durationMinutes + breakMinutes
+	for t := from.UTC().Truncate(time.Minute); t.Before(until); t = t.Add(time.Minute) {
+		end := t.Add(length)
+		if !withinAvailability(t, end, windows, cycleMinutes) {
+			continue
+		}
+		if len(result) > 0 && t.Before(result[len(result)-1].EndAt.Add(breakTime)) {
+			continue
+		}
+		result = append(result, Slot{StartAt: t, EndAt: end})
+	}
+	return result
+}
+
+func overlapsWithBreak(start, end time.Time, lessons []model.Lesson, teacherID, studentID uint64, breakMinutes int) bool {
+	breakTime := time.Duration(breakMinutes) * time.Minute
+	for _, lesson := range lessons {
+		if lesson.TeacherID == teacherID && start.Before(lesson.ScheduledEndAt.Add(breakTime)) && end.Add(breakTime).After(lesson.ScheduledStartAt) {
+			return true
+		}
+		if lesson.StudentID == studentID && start.Before(lesson.ScheduledEndAt) && end.After(lesson.ScheduledStartAt) {
 			return true
 		}
 	}
@@ -334,11 +435,8 @@ func blocked(start, end time.Time, off []model.TeacherTimeOff) bool {
 	return false
 }
 
-func studentDayBounds(start time.Time, timezone string) (time.Time, time.Time, error) {
-	loc, err := time.LoadLocation(timezone)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
+func studentDayBounds(start time.Time, _ string) (time.Time, time.Time, error) {
+	loc := mustClassroomLocation()
 	local := start.In(loc)
 	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	return day.UTC(), day.AddDate(0, 0, 1).UTC(), nil
@@ -352,13 +450,15 @@ func (s *ClassroomService) Slots(ctx context.Context, teacherID, studentID uint6
 	if !teacher.Active || !teacher.Verified {
 		return nil, bad("外教暂不可预约")
 	}
-	p, err := s.StudentProfile(ctx, studentID)
-	if err != nil {
+	if !validLessonDuration(teacher.LessonDurationMinutes) || !validBreakMinutes(teacher.BreakMinutes) {
+		return nil, bad("外教排班设置无效")
+	}
+	if _, err := s.StudentProfile(ctx, studentID); err != nil {
 		return nil, err
 	}
-	loc, err := time.LoadLocation(p.Timezone)
+	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
-		return nil, bad("学生时区无效")
+		return nil, err
 	}
 	d, err := time.Parse("2006-01-02", day)
 	if err != nil {
@@ -373,29 +473,34 @@ func (s *ClassroomService) Slots(ctx context.Context, teacherID, studentID uint6
 	if err != nil {
 		return nil, err
 	}
+	windows := prepareAvailability(avail)
 	var off []model.TeacherTimeOff
-	if err = s.db.WithContext(ctx).Where("teacher_id = ? AND start_at < ? AND end_at > ?", teacherID, end.Add(lessonDuration*time.Minute), start).Find(&off).Error; err != nil {
+	lessonLength := time.Duration(teacher.LessonDurationMinutes) * time.Minute
+	if err = s.db.WithContext(ctx).Where("teacher_id = ? AND start_at < ? AND end_at > ?", teacherID, end.Add(lessonLength), start).Find(&off).Error; err != nil {
 		return nil, err
 	}
 	var lessons []model.Lesson
-	if err = s.db.WithContext(ctx).Where("status IN ? AND scheduled_start_at < ? AND scheduled_end_at > ? AND (teacher_id = ? OR student_id = ?)", []string{"scheduled", "in_progress"}, end.Add(lessonDuration*time.Minute), start, teacherID, studentID).Find(&lessons).Error; err != nil {
+	if err = s.db.WithContext(ctx).Where("status IN ? AND scheduled_start_at < ? AND scheduled_end_at > ? AND (teacher_id = ? OR student_id = ?)", []string{"scheduled", "in_progress"}, end.Add(24*time.Hour), start.Add(-24*time.Hour), teacherID, studentID).Find(&lessons).Error; err != nil {
 		return nil, err
-	}
-	daily := 0
-	for _, l := range lessons {
-		if l.StudentID == studentID && !l.ScheduledStartAt.Before(start) && l.ScheduledStartAt.Before(end) {
-			daily++
-		}
 	}
 	now := time.Now().UTC()
 	slots := make([]Slot, 0)
-	for t := start; t.Before(end); t = t.Add(15 * time.Minute) {
-		to := t.Add(lessonDuration * time.Minute)
-		if !withinAvailability(t, to, avail) {
+	for _, slot := range scheduledSlots(start.Add(-48*time.Hour), end, windows, teacher.LessonDurationMinutes, teacher.BreakMinutes) {
+		if slot.StartAt.Before(start) {
 			continue
 		}
-		available := !t.Before(now.Add(30*time.Minute)) && !t.After(now.AddDate(0, 0, 14)) && daily < 3 && !blocked(t, to, off) && !overlaps(t, to, lessons)
-		slots = append(slots, Slot{t, to, available})
+		studentDayStart, studentDayEnd, dayErr := studentDayBounds(slot.StartAt, classroomTimezone)
+		if dayErr != nil {
+			return nil, dayErr
+		}
+		daily := 0
+		for _, l := range lessons {
+			if l.StudentID == studentID && !l.ScheduledStartAt.Before(studentDayStart) && l.ScheduledStartAt.Before(studentDayEnd) {
+				daily++
+			}
+		}
+		slot.Available = !slot.StartAt.Before(now.Add(30*time.Minute)) && !slot.StartAt.After(now.AddDate(0, 0, 14)) && daily < 3 && !blocked(slot.StartAt, slot.EndAt, off) && !overlapsWithBreak(slot.StartAt, slot.EndAt, lessons, teacherID, studentID, teacher.BreakMinutes)
+		slots = append(slots, slot)
 	}
 	return slots, nil
 }
@@ -419,7 +524,7 @@ func (s *ClassroomService) BookLesson(ctx context.Context, actorKind string, act
 	if in.DurationMinutes == 0 {
 		in.DurationMinutes = lessonDuration
 	}
-	if in.TeacherID == 0 || in.StudentID == 0 || in.DurationMinutes != lessonDuration || in.StartAt.IsZero() || len(in.Note) > 500 || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 100 {
+	if in.TeacherID == 0 || in.StudentID == 0 || !validLessonDuration(in.DurationMinutes) || in.StartAt.IsZero() || len(in.Note) > 500 || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 100 {
 		return model.Lesson{}, bad("预约信息无效")
 	}
 	if actorKind != "student" && actorKind != "admin" {
@@ -444,9 +549,11 @@ func (s *ClassroomService) BookLesson(ctx context.Context, actorKind string, act
 			if !teacher.Active || !teacher.Verified {
 				return bad("外教暂不可预约")
 			}
-			teacherZone, e := time.LoadLocation(teacher.Timezone)
-			if e != nil || start.In(teacherZone).Minute()%30 != 0 {
-				return bad("课程开始时间须对齐外教当地的半小时刻度")
+			if !validLessonDuration(teacher.LessonDurationMinutes) || in.DurationMinutes != teacher.LessonDurationMinutes {
+				return bad("课程时长与外教设置不一致，请刷新后重试")
+			}
+			if !validBreakMinutes(teacher.BreakMinutes) {
+				return bad("外教课间休息设置无效")
 			}
 			var student model.Student
 			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&student, in.StudentID).Error; e != nil {
@@ -456,7 +563,7 @@ func (s *ClassroomService) BookLesson(ctx context.Context, actorKind string, act
 				return bad("学生账号不可用")
 			}
 			var request model.LessonRequest
-			e = tx.Where("actor_kind = ? AND actor_id = ? AND request_key = ?", actorKind, actorID, in.IdempotencyKey).First(&request).Error
+			e := tx.Where("actor_kind = ? AND actor_id = ? AND request_key = ?", actorKind, actorID, in.IdempotencyKey).First(&request).Error
 			if e == nil {
 				if e = tx.First(&result, request.LessonID).Error; e != nil {
 					return e
@@ -473,22 +580,26 @@ func (s *ClassroomService) BookLesson(ctx context.Context, actorKind string, act
 			if !start.After(now) {
 				return bad("只能预约未来课程")
 			}
+			var avail []model.TeacherAvailability
+			if e := tx.Where("teacher_id = ? AND active = ?", in.TeacherID, true).Find(&avail).Error; e != nil {
+				return e
+			}
+			windows := prepareAvailability(avail)
+			if !withinAvailability(start, end, windows, 0) {
+				return conflict("此时段未开放")
+			}
 			if actorKind == "student" {
 				if start.Before(now.Add(30*time.Minute)) || start.After(now.AddDate(0, 0, 14)) {
 					return bad("预约时间不在允许范围内")
 				}
-				var avail []model.TeacherAvailability
-				if e := tx.Where("teacher_id = ? AND active = ?", in.TeacherID, true).Find(&avail).Error; e != nil {
-					return e
-				}
-				if !withinAvailability(start, end, avail) {
+				candidateSlots := scheduledSlots(start.Add(-48*time.Hour), start.Add(time.Minute), windows, in.DurationMinutes, teacher.BreakMinutes)
+				if len(candidateSlots) == 0 || !candidateSlots[len(candidateSlots)-1].StartAt.Equal(start) {
 					return conflict("此时段未开放")
 				}
-				p, e := s.StudentProfile(ctx, in.StudentID)
-				if e != nil {
+				if _, e := s.StudentProfile(ctx, in.StudentID); e != nil {
 					return e
 				}
-				dayStart, dayEnd, e := studentDayBounds(start, p.Timezone)
+				dayStart, dayEnd, e := studentDayBounds(start, classroomTimezone)
 				if e != nil {
 					return e
 				}
@@ -507,17 +618,20 @@ func (s *ClassroomService) BookLesson(ctx context.Context, actorKind string, act
 			if offCount > 0 {
 				return conflict("外教该时段请假")
 			}
-			for _, participant := range []struct {
-				column string
-				id     uint64
-			}{{"teacher_id", in.TeacherID}, {"student_id", in.StudentID}} {
-				busy, e := activeOverlap(tx, participant.column, participant.id, start, end)
-				if e != nil {
-					return e
-				}
-				if busy {
-					return conflict("时段已被预约")
-				}
+			breakTime := time.Duration(teacher.BreakMinutes) * time.Minute
+			busy, e := activeOverlap(tx, "teacher_id", in.TeacherID, start.Add(-breakTime), end.Add(breakTime))
+			if e != nil {
+				return e
+			}
+			if busy {
+				return conflict(fmt.Sprintf("外教两节课之间需休息至少 %d 分钟", teacher.BreakMinutes))
+			}
+			busy, e = activeOverlap(tx, "student_id", in.StudentID, start, end)
+			if e != nil {
+				return e
+			}
+			if busy {
+				return conflict("时段已被预约")
 			}
 			bytes := make([]byte, 12)
 			if _, e := rand.Read(bytes); e != nil {
@@ -671,26 +785,18 @@ func (s *ClassroomService) Statistics(ctx context.Context, kind string, id uint6
 	if err != nil {
 		return MonthStats{}, bad("月份格式无效")
 	}
-	zone := "Asia/Shanghai"
 	if kind == "teacher" {
-		t, e := s.Teacher(ctx, id)
-		if e != nil {
-			return MonthStats{}, e
+		if _, err := s.Teacher(ctx, id); err != nil {
+			return MonthStats{}, err
 		}
-		zone = t.Timezone
 	} else if kind == "student" {
-		p, e := s.StudentProfile(ctx, id)
-		if e != nil {
-			return MonthStats{}, e
+		if _, err := s.StudentProfile(ctx, id); err != nil {
+			return MonthStats{}, err
 		}
-		zone = p.Timezone
 	} else {
 		return MonthStats{}, bad("账号类型无效")
 	}
-	loc, err := time.LoadLocation(zone)
-	if err != nil {
-		return MonthStats{}, bad("资料中的时区无效，请联系管理员修改")
-	}
+	loc := mustClassroomLocation()
 	start := time.Date(d.Year(), d.Month(), 1, 0, 0, 0, 0, loc).UTC()
 	end := time.Date(d.Year(), d.Month()+1, 1, 0, 0, 0, 0, loc).UTC()
 	column := "teacher_id"
@@ -728,10 +834,7 @@ func (s *ClassroomService) StudentDashboard(ctx context.Context, id uint64) (map
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	month := time.Now().Format("2006-01")
-	if loc, e := time.LoadLocation(p.Timezone); e == nil {
-		month = time.Now().In(loc).Format("2006-01")
-	}
+	month := time.Now().In(mustClassroomLocation()).Format("2006-01")
 	stats, err := s.Statistics(ctx, "student", id, month)
 	if err != nil {
 		return nil, err
@@ -770,7 +873,7 @@ func (s *ClassroomService) Presence(ctx context.Context, kind string, id, lesson
 		if lesson.Status != "scheduled" && lesson.Status != "in_progress" {
 			return &AppError{403, 40310, "课程已经结束"}
 		}
-		if now.Before(lesson.ScheduledStartAt.Add(-10*time.Minute)) || !now.Before(lesson.ScheduledEndAt) {
+		if !s.canEnterLesson(now, lesson.ScheduledStartAt, lesson.ScheduledEndAt) {
 			return &AppError{403, 40310, "当前不在上课时间"}
 		}
 		if action != "connected" && action != "heartbeat" {

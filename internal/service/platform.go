@@ -233,7 +233,11 @@ func (s *PlatformService) EmailMode() string {
 	return "disabled"
 }
 func (s *PlatformService) Config(ctx context.Context) (map[string]any, error) {
-	return map[string]any{"email_enabled": s.EmailMode() != "disabled", "email_mode": s.EmailMode()}, nil
+	return map[string]any{
+		"email_enabled":                     s.EmailMode() != "disabled",
+		"email_mode":                        s.EmailMode(),
+		"classroom_debug_allow_early_entry": s.cfg.ClassroomDebugEarlyEntry,
+	}, nil
 }
 func (s *PlatformService) RBAC(ctx context.Context) (repository.RBACData, error) {
 	return s.repo.RBAC(ctx)

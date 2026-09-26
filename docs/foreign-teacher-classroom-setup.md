@@ -13,9 +13,14 @@ AGORA_WHITEBOARD_APP_IDENTIFIER=
 AGORA_WHITEBOARD_ACCESS_KEY=
 AGORA_WHITEBOARD_SECRET_KEY=
 AGORA_WHITEBOARD_REGION=sg
+CLASSROOM_DEBUG_ALLOW_EARLY_ENTRY=false
 ```
 
 `AGORA_WHITEBOARD_REGION` 与声网白板项目区域一致。教师激活链接依赖现有邮件配置：生产环境配置 SMTP 与实际 HTTPS `APP_ORIGIN`；本地开发可查看 `DEV_MAIL_DIR` 中的邮件。未配置 Agora 时，账号与排课页面仍可使用，进入课堂会明确提示服务未配置。
+
+本地联调时可将 `CLASSROOM_DEBUG_ALLOW_EARLY_ENTRY=true`，然后重启服务。该开关只在 `APP_ADDR` 绑定到 `127.0.0.1`、`::1` 或 `localhost` 时生效；它允许提前进入课前检测和课堂接口，但课程结束后的限制不变。调试完成后应删除该配置或设回 `false`。
+
+更改 `AGORA_WHITEBOARD_REGION` 后，已经创建的课程仍保存着原区域的白板房间 UUID，不能跨区域复用。请新建测试课程验证新区域；旧房间在新区域关闭时若返回 404，会按已关闭处理。
 
 启动方式与现有项目相同：构建前端并启动 Go 服务。首次启动通过现有 `AutoMigrate` 新建教师、课程、出勤等表，并为超级管理员新增教师及课程权限。非超级管理员须由角色管理页分配 `teachers.read/write`、`lessons.read/write/cancel`；手工排课还需要 `users.read` 来选择学生。
 

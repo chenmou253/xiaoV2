@@ -3,19 +3,21 @@ package model
 import "time"
 
 type Teacher struct {
-	ID                  uint64    `gorm:"primaryKey" json:"id"`
-	ActivationEmailSent *bool     `gorm:"-" json:"activation_email_sent,omitempty"`
-	Email               string    `gorm:"size:254;not null;uniqueIndex" json:"email"`
-	PasswordHash        string    `gorm:"size:255;not null" json:"-"`
-	Verified            bool      `gorm:"not null;default:false" json:"verified"`
-	Active              bool      `gorm:"not null;default:true" json:"active"`
-	DisplayName         string    `gorm:"size:120;not null" json:"display_name"`
-	Avatar              string    `gorm:"size:500" json:"avatar"`
-	Country             string    `gorm:"size:80" json:"country"`
-	Timezone            string    `gorm:"size:80;not null" json:"timezone"`
-	Bio                 string    `gorm:"type:text" json:"bio"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                    uint64    `gorm:"primaryKey" json:"id"`
+	ActivationEmailSent   *bool     `gorm:"-" json:"activation_email_sent,omitempty"`
+	Email                 string    `gorm:"size:254;not null;uniqueIndex" json:"email"`
+	PasswordHash          string    `gorm:"size:255;not null" json:"-"`
+	Verified              bool      `gorm:"not null;default:false" json:"verified"`
+	Active                bool      `gorm:"not null;default:true" json:"active"`
+	DisplayName           string    `gorm:"size:120;not null" json:"display_name"`
+	Avatar                string    `gorm:"size:500" json:"avatar"`
+	Country               string    `gorm:"size:80" json:"country"`
+	Timezone              string    `gorm:"size:80;not null" json:"-"`
+	LessonDurationMinutes int       `gorm:"not null;default:30" json:"lesson_duration_minutes"`
+	BreakMinutes          int       `gorm:"not null;default:15" json:"break_minutes"`
+	Bio                   string    `gorm:"type:text" json:"bio"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type TeacherSession struct {
@@ -38,7 +40,7 @@ type StudentProfile struct {
 	DisplayName string    `gorm:"size:120" json:"display_name"`
 	Avatar      string    `gorm:"size:500" json:"avatar"`
 	Grade       int       `json:"grade"`
-	Timezone    string    `gorm:"size:80;not null;default:Asia/Shanghai" json:"timezone"`
+	Timezone    string    `gorm:"size:80;not null;default:Asia/Shanghai" json:"-"`
 	ParentName  string    `gorm:"size:120" json:"parent_name"`
 	ParentEmail string    `gorm:"size:254" json:"parent_email"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -50,7 +52,7 @@ type TeacherAvailability struct {
 	Weekday     int    `gorm:"not null" json:"weekday"` // 0 = Sunday
 	StartMinute int    `gorm:"not null" json:"start_minute"`
 	EndMinute   int    `gorm:"not null" json:"end_minute"`
-	Timezone    string `gorm:"size:80;not null" json:"timezone"`
+	Timezone    string `gorm:"size:80;not null" json:"-"`
 	Active      bool   `gorm:"not null;default:true" json:"active"`
 }
 

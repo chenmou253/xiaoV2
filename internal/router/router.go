@@ -47,6 +47,9 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	if classroom != nil {
+		r.GET("/uploads/teacher-avatars/:name", classroom.TeacherAvatar)
+	}
 	api := r.Group("/api/v1")
 	if platform != nil {
 		api.Use(platform.Authenticate())
@@ -117,7 +120,9 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 			admin.GET("/teachers", platform.Require("teachers.read"), classroom.Teachers)
 			admin.POST("/teachers", platform.Require("teachers.write"), classroom.CreateTeacher)
 			admin.PATCH("/teachers/:id", platform.Require("teachers.write"), classroom.UpdateTeacher)
+			admin.POST("/teachers/:id/avatar", platform.Require("teachers.write"), classroom.UploadTeacherAvatar)
 			admin.GET("/teachers/:id/availability", platform.Require("teachers.read"), classroom.Availability)
+			admin.GET("/teachers/:id/schedule-conflicts", platform.Require("teachers.read"), classroom.ScheduleConflicts)
 			admin.POST("/teachers/:id/availability", platform.Require("teachers.write"), classroom.ReplaceAvailability)
 			admin.GET("/teachers/:id/time-off", platform.Require("teachers.read"), classroom.TimeOff)
 			admin.POST("/teachers/:id/time-off", platform.Require("teachers.write"), classroom.AddTimeOff)
@@ -220,7 +225,7 @@ func securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "same-origin")
-		c.Header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob: https://*.netless.link; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; connect-src 'self' https://*.agora.io wss://*.agora.io https://*.sd-rtn.com wss://*.sd-rtn.com https://*.rtnsvc.com wss://*.rtnsvc.com https://*.rtesvc.com wss://*.rtesvc.com https://*.netless.link wss://*.netless.link")
+		c.Header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob: https://*.netless.link; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://sdk.whiteboard.sd-rtn.com; worker-src 'self' blob:; connect-src 'self' https://*.agora.io wss://*.agora.io https://*.sd-rtn.com wss://*.sd-rtn.com https://*.rtnsvc.com wss://*.rtnsvc.com https://*.rtesvc.com wss://*.rtesvc.com https://*.netless.link wss://*.netless.link")
 		c.Next()
 	}
 }

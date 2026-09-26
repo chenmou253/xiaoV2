@@ -38,6 +38,13 @@ func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Teacher{}, &model.StudentProfile{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.TeacherSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.TeacherEmailToken{}, &model.AuthThrottle{}, &model.TeacherAvailability{}, &model.TeacherTimeOff{}, &model.Lesson{}, &model.LessonPresenceSegment{}, &model.LessonRequest{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookTranslationItem{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
+	// Existing teacher/student schedules are reinterpreted in China time, which
+	// is now the single scheduling timezone for the whole classroom system.
+	for _, table := range []string{"teachers", "student_profiles", "teacher_availabilities"} {
+		if err := db.Table(table).Where("timezone <> ? OR timezone IS NULL", "Asia/Shanghai").Update("timezone", "Asia/Shanghai").Error; err != nil {
+			return fmt.Errorf("normalize %s timezone: %w", table, err)
+		}
+	}
 	return seed(db)
 }
 
