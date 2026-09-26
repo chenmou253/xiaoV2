@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type AdminBook, type AIModel, type AIModelSettings, type AIVoice, type Identity, type PageGroup, type SiteSetting } from "./api";
 import AudioReviewPage from "./AudioReviewPage";
+import {AdminTeachers,AdminLessons} from './AdminClassroom';
 import DraftPageEditor from "./DraftPageEditor";
 import "./admin-job-progress.css";
 
@@ -22,6 +23,8 @@ type Tab =
   | "books"
   | "site-settings"
   | "students"
+  | "teachers"
+  | "lessons"
   | "rbac"
   | "audit";
 const tabs: [Tab, string, string][] = [
@@ -30,6 +33,8 @@ const tabs: [Tab, string, string][] = [
   ["books", "已发布教材", "content.read"],
   ["site-settings", "网站设置", "site_settings.read"],
   ["students", "学生账号", "users.read"],
+  ["teachers", "外教管理", "teachers.read"],
+  ["lessons", "课程管理", "lessons.read"],
   ["rbac", "角色与权限", "rbac.read"],
   ["audit", "操作日志", "audit.read"],
 ];
@@ -295,6 +300,8 @@ export default function Admin() {
           />
         )}
         {tab === "audit" && <Table rows={data || []} />}
+        {tab === "teachers" && <AdminTeachers canWrite={can('teachers.write')} showStats={can('lessons.read')} />}
+        {tab === "lessons" && <AdminLessons canWrite={can('lessons.write')} canCancel={can('lessons.cancel')} canReadStudents={can('users.read')} />}
       </section>
     </main>
   );

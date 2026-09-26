@@ -36,6 +36,11 @@ func (r *PlatformRepository) Account(ctx context.Context, kind, email string) (u
 		e := r.db.WithContext(ctx).Where("email = ?", email).First(&a).Error
 		return a.ID, a.PasswordHash, a.Verified, a.Active, e
 	}
+	if kind == "teacher" {
+		var a model.Teacher
+		e := r.db.WithContext(ctx).Where("email = ?", email).First(&a).Error
+		return a.ID, a.PasswordHash, a.Verified, a.Active, e
+	}
 	var a model.Student
 	e := r.db.WithContext(ctx).Where("email = ?", email).First(&a).Error
 	return a.ID, a.PasswordHash, a.Verified, a.Active, e
@@ -62,12 +67,35 @@ func (r *PlatformRepository) SaveEmailToken(ctx context.Context, kind, purpose, 
 	if kind == "admin" {
 		return r.db.WithContext(ctx).Create(&model.AdminEmailToken{TokenHash: h, AccountID: id, Purpose: purpose, ExpiresAt: expires}).Error
 	}
+	if kind == "teacher" {
+		return r.db.WithContext(ctx).Create(&model.TeacherEmailToken{TokenHash: h, AccountID: id, Purpose: purpose, ExpiresAt: expires}).Error
+	}
 	return r.db.WithContext(ctx).Create(&model.StudentEmailToken{TokenHash: h, AccountID: id, Purpose: purpose, ExpiresAt: expires}).Error
 }
 func (r *PlatformRepository) ConsumeEmailToken(ctx context.Context, kind, purpose, raw, newHash string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		h := HashToken(raw)
 		var id uint64
+		if kind == "teacher" {
+			var t model.TeacherEmailToken
+			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token_hash=? AND purpose=? AND expires_at>?", h, purpose, time.Now().UTC()).First(&t).Error; e != nil {
+				return e
+			}
+			id = t.AccountID
+			if purpose == "verify" {
+				if e := tx.Model(&model.Teacher{}).Where("id=?", id).Update("verified", true).Error; e != nil {
+					return e
+				}
+			} else {
+				if e := tx.Model(&model.Teacher{}).Where("id=?", id).Updates(map[string]any{"password_hash": newHash, "verified": true}).Error; e != nil {
+					return e
+				}
+				if e := tx.Where("account_id=?", id).Delete(&model.TeacherSession{}).Error; e != nil {
+					return e
+				}
+			}
+			return tx.Where("account_id=?", id).Delete(&model.TeacherEmailToken{}).Error
+		}
 		if kind == "admin" {
 			var t model.AdminEmailToken
 			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token_hash=? AND purpose=? AND expires_at>?", h, purpose, time.Now().UTC()).First(&t).Error; e != nil {
@@ -113,12 +141,18 @@ func (r *PlatformRepository) CreateSession(ctx context.Context, kind, raw string
 	if kind == "admin" {
 		return r.db.WithContext(ctx).Create(&model.AdminSession{TokenHash: h, AccountID: id, ExpiresAt: expires}).Error
 	}
+	if kind == "teacher" {
+		return r.db.WithContext(ctx).Create(&model.TeacherSession{TokenHash: h, AccountID: id, ExpiresAt: expires}).Error
+	}
 	return r.db.WithContext(ctx).Create(&model.StudentSession{TokenHash: h, AccountID: id, ExpiresAt: expires}).Error
 }
 func (r *PlatformRepository) DeleteSession(ctx context.Context, kind, raw string) error {
 	h := HashToken(raw)
 	if kind == "admin" {
 		return r.db.WithContext(ctx).Where("token_hash=?", h).Delete(&model.AdminSession{}).Error
+	}
+	if kind == "teacher" {
+		return r.db.WithContext(ctx).Where("token_hash=?", h).Delete(&model.TeacherSession{}).Error
 	}
 	return r.db.WithContext(ctx).Where("token_hash=?", h).Delete(&model.StudentSession{}).Error
 }
@@ -136,6 +170,15 @@ func (r *PlatformRepository) ResolveSession(ctx context.Context, kind, raw strin
 		if e := r.db.WithContext(ctx).Table("admin_roles ar").Select("DISTINCT rp.permission_code").Joins("JOIN role_permissions rp ON rp.role_id=ar.role_id").Where("ar.admin_id=?", a.ID).Order("rp.permission_code").Scan(&out.Permissions).Error; e != nil {
 			return out, e
 		}
+		return out, nil
+	}
+	if kind == "teacher" {
+		var a model.Teacher
+		e := r.db.WithContext(ctx).Table("teacher_sessions s").Select("a.id,a.email").Joins("JOIN teachers a ON a.id=s.account_id").Where("s.token_hash=? AND s.expires_at>? AND a.active=1 AND a.verified=1", h, time.Now().UTC()).Scan(&a).Error
+		if e != nil || a.ID == 0 {
+			return out, gorm.ErrRecordNotFound
+		}
+		out.ID, out.Email, out.Permissions = a.ID, a.Email, []string{}
 		return out, nil
 	}
 	var a model.Student
@@ -354,10 +397,10 @@ func (r *PlatformRepository) ModelSettings(ctx context.Context) (ai.Settings, er
 
 func (r *PlatformRepository) SaveModelSettings(ctx context.Context, settings ai.Settings, actor uint64) error {
 	values := map[string]string{
-		"ai.ocr_model": settings.OCRModel,
+		"ai.ocr_model":         settings.OCRModel,
 		"ai.translation_model": settings.TranslationModel,
-		"ai.tts_model": settings.TTSModel,
-		"ai.tts_voice": settings.TTSVoice,
+		"ai.tts_model":         settings.TTSModel,
+		"ai.tts_voice":         settings.TTSVoice,
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		before := map[string]string{}

@@ -30,6 +30,9 @@ func kind(c *gin.Context) string {
 	if strings.HasPrefix(c.FullPath(), "/api/v1/admin/") {
 		return "admin"
 	}
+	if strings.HasPrefix(c.FullPath(), "/api/v1/teacher/") {
+		return "teacher"
+	}
 	return "student"
 }
 func identity(c *gin.Context) *repository.Identity {
@@ -72,6 +75,20 @@ func (h *PlatformHandler) Require(permission string) gin.HandlerFunc {
 			return
 		}
 		if u.Kind != "admin" || !HasPermission(c, permission) {
+			failure(c, 403, 40300, "没有此操作的权限")
+			return
+		}
+		c.Next()
+	}
+}
+func (h *PlatformHandler) RequireKind(kind string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		u := identity(c)
+		if u == nil {
+			failure(c, 401, 40100, "请先登录")
+			return
+		}
+		if u.Kind != kind {
 			failure(c, 403, 40300, "没有此操作的权限")
 			return
 		}

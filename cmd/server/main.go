@@ -42,6 +42,7 @@ func main() {
 	bookRepo := repository.NewBookRepository(db)
 	bookService := service.NewBookService(bookRepo, resources)
 	platformService := service.NewPlatformService(repository.NewPlatformRepository(db), cfg)
+	classroomService := service.NewClassroomService(db, platformService)
 	editorService := service.NewEditorService(db, cfg, resources)
 	platformService.SetTTSModelSwitchHook(editorService.ReleaseAudioDaemonForModelSwitch)
 	platformService.SetTranslationModelSwitchHook(editorService.ReleaseTranslationDaemonForModelSwitch)
@@ -66,7 +67,7 @@ func main() {
 	}
 	u, _ := url.Parse(cfg.AppOrigin)
 	platformHandler := handler.NewPlatformHandler(platformService, u != nil && u.Scheme == "https")
-	engine := router.New(db, handler.NewBookHandler(bookService), cfg.WebRoot, cfg.GinMode, platformHandler, handler.NewEditorHandler(editorService), cfg.AppOrigin)
+	engine := router.New(db, handler.NewBookHandler(bookService), cfg.WebRoot, cfg.GinMode, platformHandler, handler.NewEditorHandler(editorService), handler.NewClassroomHandler(classroomService), cfg.AppOrigin)
 	server := &http.Server{Addr: cfg.Addr, Handler: engine, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 300 * time.Second, WriteTimeout: 310 * time.Second, IdleTimeout: 60 * time.Second}
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -75,6 +76,7 @@ func main() {
 			log.Printf("教材工作进程停止: %v", workerErr)
 		}
 	}()
+	go classroomService.RunReconciler(stop)
 	go func() {
 		<-stop.Done()
 		ctx, done := context.WithTimeout(context.Background(), 10*time.Second)

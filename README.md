@@ -21,6 +21,8 @@ MySQL、`/data/books`、`/data/editor` 分别使用持久化卷。迁移已有�
 
 ## 启动
 
+外教 1v1 课程的配置与上线前检查见 [外教课堂接入说明](docs/foreign-teacher-classroom-setup.md)，修订后的业务规则见 [外教课堂设计方案](docs/foreign-teacher-classroom-design.md)。
+
 项目会自动读取根目录 `.env`；已有进程环境变量优先于 `.env`。密码不会被打印。先安装 Poppler 和项目隔离的 PaddleOCR 环境，再构建前端、启动 Gin：
 
 ```bash

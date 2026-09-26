@@ -11,26 +11,32 @@ import (
 )
 
 type Config struct {
-	Addr          string
-	MySQLHost     string
-	MySQLPort     string
-	MySQLUser     string
-	MySQLPassword string
-	MySQLDatabase string
-	ResourceRoot  string
-	WebRoot       string
-	GinMode       string
-	AppOrigin     string
-	DevMailDir    string
-	SMTPHost      string
-	SMTPPort      string
-	SMTPUser      string
-	SMTPPassword  string
-	SMTPFrom      string
-	AdminEmail    string
-	AdminPassword string
-	EditorRoot    string
-	Python        string
+	Addr                    string
+	MySQLHost               string
+	MySQLPort               string
+	MySQLUser               string
+	MySQLPassword           string
+	MySQLDatabase           string
+	ResourceRoot            string
+	WebRoot                 string
+	GinMode                 string
+	AppOrigin               string
+	DevMailDir              string
+	SMTPHost                string
+	SMTPPort                string
+	SMTPUser                string
+	SMTPPassword            string
+	SMTPFrom                string
+	AdminEmail              string
+	AdminPassword           string
+	EditorRoot              string
+	Python                  string
+	AgoraAppID              string
+	AgoraAppCertificate     string
+	WhiteboardAppIdentifier string
+	WhiteboardAccessKey     string
+	WhiteboardSecretKey     string
+	WhiteboardRegion        string
 }
 
 func Load() (Config, error) {
@@ -41,26 +47,32 @@ func Load() (Config, error) {
 	// Process environment keeps precedence; .env only supplies missing values.
 	_ = loadEnvFile(filepath.Join(cwd, ".env"))
 	cfg := Config{
-		Addr:          value("APP_ADDR", "127.0.0.1:8080"),
-		MySQLHost:     value("MYSQL_HOST", "127.0.0.1"),
-		MySQLPort:     value("MYSQL_PORT", "3306"),
-		MySQLUser:     value("MYSQL_USER", "root"),
-		MySQLPassword: os.Getenv("MYSQL_PASSWORD"),
-		MySQLDatabase: value("MYSQL_DATABASE", "english"),
-		ResourceRoot:  value("RESOURCE_ROOT", "storage/books"),
-		WebRoot:       value("WEB_ROOT", "web/dist"),
-		GinMode:       value("GIN_MODE", "release"),
-		AppOrigin:     strings.TrimRight(value("APP_ORIGIN", "http://127.0.0.1:8080"), "/"),
-		DevMailDir:    valueAllowEmpty("DEV_MAIL_DIR", ".local/mail"),
-		SMTPHost:      strings.TrimSpace(os.Getenv("SMTP_HOST")),
-		SMTPPort:      value("SMTP_PORT", "587"),
-		SMTPUser:      os.Getenv("SMTP_USER"),
-		SMTPPassword:  os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:      strings.TrimSpace(os.Getenv("SMTP_FROM")),
-		AdminEmail:    strings.TrimSpace(os.Getenv("ADMIN_EMAIL")),
-		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
-		EditorRoot:    value("EDITOR_STORAGE", "storage/editor"),
-		Python:        value("EDITOR_PYTHON", "python3"),
+		Addr:                    value("APP_ADDR", "127.0.0.1:8080"),
+		MySQLHost:               value("MYSQL_HOST", "127.0.0.1"),
+		MySQLPort:               value("MYSQL_PORT", "3306"),
+		MySQLUser:               value("MYSQL_USER", "root"),
+		MySQLPassword:           os.Getenv("MYSQL_PASSWORD"),
+		MySQLDatabase:           value("MYSQL_DATABASE", "english"),
+		ResourceRoot:            value("RESOURCE_ROOT", "storage/books"),
+		WebRoot:                 value("WEB_ROOT", "web/dist"),
+		GinMode:                 value("GIN_MODE", "release"),
+		AppOrigin:               strings.TrimRight(value("APP_ORIGIN", "http://127.0.0.1:8080"), "/"),
+		DevMailDir:              valueAllowEmpty("DEV_MAIL_DIR", ".local/mail"),
+		SMTPHost:                strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		SMTPPort:                value("SMTP_PORT", "587"),
+		SMTPUser:                os.Getenv("SMTP_USER"),
+		SMTPPassword:            os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:                strings.TrimSpace(os.Getenv("SMTP_FROM")),
+		AdminEmail:              strings.TrimSpace(os.Getenv("ADMIN_EMAIL")),
+		AdminPassword:           os.Getenv("ADMIN_PASSWORD"),
+		EditorRoot:              value("EDITOR_STORAGE", "storage/editor"),
+		Python:                  value("EDITOR_PYTHON", "python3"),
+		AgoraAppID:              strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
+		AgoraAppCertificate:     strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
+		WhiteboardAppIdentifier: strings.TrimSpace(os.Getenv("AGORA_WHITEBOARD_APP_IDENTIFIER")),
+		WhiteboardAccessKey:     strings.TrimSpace(os.Getenv("AGORA_WHITEBOARD_ACCESS_KEY")),
+		WhiteboardSecretKey:     strings.TrimSpace(os.Getenv("AGORA_WHITEBOARD_SECRET_KEY")),
+		WhiteboardRegion:        value("AGORA_WHITEBOARD_REGION", "sg"),
 	}
 	if strings.ContainsAny(cfg.MySQLDatabase, "`/\\\x00") || cfg.MySQLDatabase == "" {
 		return Config{}, fmt.Errorf("MYSQL_DATABASE is invalid")

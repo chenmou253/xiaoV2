@@ -1,9 +1,11 @@
-import {useCallback,useEffect,useRef,useState} from 'react';
+import {lazy,Suspense,useCallback,useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ArrowRight,BookOpen,Check,ChevronLeft,ChevronRight,Headphones,Languages,Sparkles,Square,Volume2,ZoomIn,ZoomOut} from 'lucide-react';
 import {booksAPI,type Accent,type Book,type BookPage,type PageContent,type PageGroup,type Segment,type Word} from './api';
-import Account from './Account';
 import Admin from './Admin';
 import AdminLogin from './AdminLogin';
+import {StudentArea,TeacherArea,TeacherLogin} from './Learning';
+import DeviceCheck from './classroom/DeviceCheck';
+const Classroom=lazy(()=>import('./classroom/Classroom'));
 
 type ShelfState={kind:'loading'}|{kind:'error';message:string}|{kind:'ready';books:Book[]};
 
@@ -27,7 +29,14 @@ function pageGroupKey(item:BookPage){return `${item.page_group}:${item.page_grou
 function pageGroupTitle(item:BookPage){const group=pageGroupNames[item.page_group as PageGroup];return item.page_group==='body'&&item.unit?`${group} · ${item.unit}`:group}
 
 export default function App(){
- if(location.pathname==='/account')return <Account/>;
+ const path=location.pathname;
+ const studentClass=path.match(/^\/classroom\/(\d+)(\/check)?$/);
+ if(studentClass)return studentClass[2]?<DeviceCheck role="student" id={Number(studentClass[1])}/>:<Suspense fallback={<main className="admin-loading">正在加载课堂…</main>}><Classroom role="student" id={Number(studentClass[1])}/></Suspense>;
+ const teacherClass=path.match(/^\/teacher\/classroom\/(\d+)(\/check)?$/);
+ if(teacherClass)return teacherClass[2]?<DeviceCheck role="teacher" id={Number(teacherClass[1])}/>:<Suspense fallback={<main className="admin-loading">正在加载课堂…</main>}><Classroom role="teacher" id={Number(teacherClass[1])}/></Suspense>;
+ if(path==='/teacher/login')return <TeacherLogin/>;
+ if(path==='/teacher'||path.startsWith('/teacher/'))return <TeacherArea/>;
+ if(path==='/account'||path.startsWith('/account/'))return <StudentArea/>;
  if(location.pathname==='/admin/login')return <AdminLogin/>;
  if(location.pathname==='/admin')return <Admin/>;
  const [state,setState]=useState<ShelfState>({kind:'loading'}),[selected,setSelected]=useState(routeBook());
@@ -38,7 +47,7 @@ export default function App(){
  return <main><Header leave={()=>{location.hash=''}}/>{book?<Reader book={book}/>:<Shelf state={state} onRetry={load}/>}</main>
 }
 
-function Header({leave}:{leave:()=>void}){return <header className="topbar"><button className="brand" onClick={leave} aria-label="回到书架"><span className="brand-icon"><BookOpen size={25}/></span><span>小小点读家<small>LITTLE READERS CLUB</small></span></button><a className="account-link" href="/account?mode=login">登录</a></header>}
+function Header({leave}:{leave:()=>void}){return <header className="topbar"><button className="brand" onClick={leave} aria-label="回到书架"><span className="brand-icon"><BookOpen size={25}/></span><span>小小点读家<small>LITTLE READERS CLUB</small></span></button><a className="account-link" href="/account">学习中心</a></header>}
 
 function Shelf({state,onRetry}:{state:ShelfState;onRetry:()=>void}){
  return <div className="shelf"><div className="shelf-intro"><span className="eyebrow">MY LITTLE BOOKSHELF</span><h1>嗨，今天读哪一本？<span className="hello">☀</span></h1><p>选好课本，点一点，让英语开口说话。</p></div>
