@@ -6,5 +6,7 @@ import './admin.css';
 import './editor.css';
 import './frontend.css';
 import './classroom.css';
+import './student.css';
+import './classroom-theme.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

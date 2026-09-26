@@ -1,0 +1,67 @@
+/* The live classroom shares the reading area's warm surfaces and quiet controls. */
+.classroom-shell{height:100vh;height:100dvh;min-height:420px;display:flex;flex-direction:column;overflow:hidden;background:#fffdf5;color:#243e45}
+.classroom-shell .classroom-topbar{flex:0 0 auto;min-height:76px;display:flex;align-items:center;gap:22px;padding:12px clamp(16px,3vw,42px);background:#fffef9;border-bottom:1px solid #e8e9df;color:#243e45}
+.classroom-identity{display:flex;align-items:center;gap:11px;min-width:0}
+.classroom-brand-mark{flex:0 0 42px;width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:#dcece2;color:#398471;transform:rotate(-6deg)}
+.classroom-identity>div{display:grid;gap:1px;min-width:0}
+.classroom-identity small{font-size:11px;color:#789186;white-space:nowrap}
+.classroom-shell .classroom-identity strong{font-size:17px;color:#29494a;white-space:nowrap}
+.classroom-topbar-status{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-left:auto}
+.classroom-status-chip{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-height:34px;padding:6px 12px;border-radius:18px;background:#f0f4ec;color:#5b766b;font-size:13px;font-weight:600}
+.classroom-status-chip.is-good{color:#367e62;background:#e5f3e8}
+.classroom-shell .classroom-leave{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:39px;margin-left:2px;padding:9px 15px;border:1px solid #d8e3da;border-radius:11px;background:#fff;color:#517367;font-size:13px;font-weight:700;white-space:nowrap}
+.classroom-shell .classroom-leave:hover{background:#f1f6ec}
+.classroom-shell button:focus-visible,.classroom-shell a:focus-visible{outline:3px solid #e9813b;outline-offset:3px}
+.classroom-shell .classroom-notice{flex:0 0 auto;display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin:10px clamp(12px,1.4vw,22px) 0;padding:11px 15px;border:1px solid #f1d6bb;border-radius:13px;background:#fff2e7;color:#814d2d;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.classroom-notice>svg{flex-shrink:0}.classroom-notice>span{flex:1;min-width:140px}
+.classroom-shell .classroom-notice button{display:inline-flex;align-items:center;gap:5px;background:#fff;border:1px solid #e7cba9;border-radius:9px;color:#8a582f;padding:7px 11px;font-size:13px;font-weight:700;white-space:nowrap}
+.classroom-notice a{color:#8a582f;text-decoration:underline;font-size:13px;white-space:nowrap}
+.classroom-shell .classroom-grid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(8px,1vw,16px);padding:clamp(8px,1vw,16px);background:#fffdf5}
+.classroom-shell .classroom-stage{position:relative;min-height:0;min-width:0;border:1px solid #dfe7dd;border-radius:19px;overflow:hidden;background:#fff;box-shadow:0 4px 0 #edf0e4;color:#243e45}
+.classroom-shell .lesson-whiteboard{position:relative;height:100%;width:100%;display:flex;flex-direction:column;background:#fff}
+.classroom-shell .whiteboard-toolbar{flex:0 0 auto;display:flex;align-items:center;flex-wrap:nowrap;gap:6px;min-height:54px;padding:7px 11px;border-bottom:1px solid #e3eadf;background:#f8faf4;overflow-x:auto;scrollbar-width:thin}
+.classroom-shell .whiteboard-toolbar button{flex-shrink:0;min-height:37px;padding:8px 11px;border:1px solid #d9e5d8;border-radius:10px;background:#fff;color:#507467;font-size:13px;font-weight:600;white-space:nowrap}
+.classroom-shell .whiteboard-toolbar button:hover:not(:disabled){background:#edf4e9}
+.classroom-shell .whiteboard-toolbar button[aria-pressed=true]{border-color:#398c82;background:#398c82;color:#fff}
+.classroom-shell .whiteboard-toolbar button:disabled{opacity:.55}
+.classroom-shell .whiteboard-toolbar button:last-child:not([aria-pressed]){margin-left:auto}
+.classroom-shell .whiteboard-canvas{flex:1;min-height:0;position:relative;background:#fff}
+.classroom-shell .whiteboard-overlay{position:absolute;z-index:2;inset:54px 0 0;display:grid;place-items:center;padding:18px;background:#fffcf7ec;text-align:center;color:#243e45}
+.classroom-shell .classroom-stage>.whiteboard-overlay{inset:0}
+.whiteboard-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;width:min(430px,100%);max-height:100%;overflow:auto;padding:28px 22px;border:1px solid #e6eadf;border-radius:18px;background:#fff;box-shadow:0 8px 26px #415a4212}
+.whiteboard-state-icon{display:grid;place-items:center;width:55px;height:55px;flex-shrink:0;border-radius:17px;background:#e4f0e7;color:#518b77}
+.whiteboard-state-icon.is-warning{background:#fff0de;color:#a87539}
+.whiteboard-state-icon:not(.is-warning) svg{animation:classroom-spin 1.8s linear infinite}
+.whiteboard-state h2{margin:2px 0 0;font-size:19px;color:#284d47}
+.whiteboard-state p{max-width:100%;margin:0;color:#71847a;font-size:13px;line-height:1.75;overflow-wrap:anywhere}
+.classroom-shell .classroom-primary{display:inline-flex;align-items:center;gap:7px;justify-content:center;margin-top:5px;min-height:40px;padding:9px 15px;border:0;border-radius:10px;background:#398c82;color:#fff;font-weight:700;font-size:13px}
+@keyframes classroom-spin{to{transform:rotate(360deg)}}
+.classroom-shell .shared-screen{position:absolute;z-index:2;inset:0;background:#142521}
+.classroom-shell .classroom-videos{min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,1fr)}
+.classroom-shell .classroom-videos>div{position:relative;min-height:0;min-width:0;overflow:hidden;border:1px solid #dfe7dd;border-radius:19px;background:#dcebe4;box-shadow:0 4px 0 #edf0e4;cursor:pointer}
+.classroom-shell .classroom-videos .video-box{position:relative;z-index:1;width:100%;height:100%;background:transparent}
+.classroom-shell .classroom-videos .video-box,.classroom-shell .classroom-videos .video-box *,.classroom-shell .local-video-pip .video-box,.classroom-shell .local-video-pip .video-box *{pointer-events:none}
+.classroom-shell .classroom-videos>div>small,.classroom-shell .local-video-pip>small{position:absolute;z-index:4;top:11px;left:11px;padding:5px 9px;border-radius:8px;background:#172e28bc;color:#fff;font-size:11px;font-weight:600}
+.classroom-shell .classroom-videos>div:focus-visible,.classroom-shell .local-video-pip:focus-visible{outline:3px solid #e9813b;outline-offset:-5px}
+.video-swap-hint{position:absolute;z-index:4;top:11px;right:11px;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:23px;min-height:23px;padding:4px;border-radius:7px;background:#172e28bc;color:#fff;font-size:11px;font-weight:600;pointer-events:none}
+.video-swap-hint.is-large{padding:6px 9px}
+.classroom-remote-empty{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:20px;color:#507468;background:radial-gradient(circle at 50% 35%,#edf5ed,#dcebe4 70%)}
+.classroom-remote-empty>span{display:grid;place-items:center;width:66px;height:66px;border-radius:19px;background:#f7fbf5;color:#63917e}
+.classroom-remote-empty strong{font-size:18px;color:#355e51}.classroom-remote-empty p{margin:0;color:#718e81;font-size:13px;line-height:1.5}
+.classroom-shell .local-video-pip{z-index:5;left:16px;bottom:16px;width:clamp(108px,11vw,164px);aspect-ratio:16/9;border:2px solid #fff;border-radius:12px;background:#263d36;box-shadow:0 6px 22px #20382b60;overflow:hidden;touch-action:none;cursor:grab}
+.classroom-shell .local-video-pip:active{cursor:grabbing}
+.classroom-shell .local-video-pip .video-box{height:100%;width:100%}
+.local-video-placeholder{position:absolute;inset:0;display:grid;place-items:center;padding:10px;color:#dbe9df;background:#263d36;font-size:11px;text-align:center}
+.classroom-shell .classroom-controls{flex:0 0 auto;min-height:70px;display:flex;justify-content:center;align-items:center;gap:12px;padding:11px 20px calc(11px + env(safe-area-inset-bottom,0px));border-top:1px solid #e8e9df;background:#fffef9;color:#243e45}
+.classroom-shell .classroom-controls button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 18px;border:1px solid #d7e3d8;border-radius:11px;background:#f5f8f1;color:#3d6a59;font-size:13px;font-weight:700;white-space:nowrap}
+.classroom-shell .classroom-controls button:hover{background:#e9f2e8}
+.classroom-shell .classroom-controls button[aria-pressed=true]{border-color:#efdbca;background:#fff0e6;color:#9b5c3a}
+@media(max-width:800px){
+ .classroom-shell .classroom-topbar{gap:9px;padding:9px 14px;min-height:65px;flex-wrap:wrap}.classroom-brand-mark{flex-basis:36px;width:36px;height:36px;border-radius:11px}.classroom-shell .classroom-identity strong{font-size:14px}.classroom-identity small{font-size:9px}.classroom-status-chip{min-height:30px;padding:5px 9px;font-size:11px}.classroom-status-chip svg{width:14px;height:14px}.classroom-topbar-status{order:3;width:100%;margin:0;gap:6px}.classroom-shell .classroom-leave{margin-left:auto;min-height:34px;font-size:11px;padding:6px 9px}
+ .classroom-shell .classroom-grid{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(148px,27vh);gap:8px;padding:8px}.classroom-shell .classroom-stage,.classroom-shell .classroom-videos>div{border-radius:15px;box-shadow:none}.classroom-shell .classroom-videos{grid-template-columns:1fr;grid-template-rows:1fr}.classroom-shell .local-video-pip{width:clamp(94px,26vw,125px);left:10px;bottom:10px}.classroom-remote-empty>span{width:48px;height:48px;border-radius:13px}.classroom-remote-empty>span svg{width:25px;height:25px}.classroom-remote-empty strong{font-size:15px}.classroom-remote-empty p{font-size:11px}
+ .classroom-shell .whiteboard-toolbar{min-height:49px;padding:6px}.classroom-shell .whiteboard-toolbar button{min-height:35px;padding:7px 10px;font-size:12px}.classroom-shell .whiteboard-overlay{inset:49px 0 0}.whiteboard-state{padding:16px;gap:6px}.whiteboard-state-icon{width:42px;height:42px;border-radius:12px}.whiteboard-state-icon svg{width:23px;height:23px}.whiteboard-state h2{font-size:16px}.whiteboard-state p{font-size:11px}.classroom-shell .classroom-primary{min-height:34px;font-size:12px;padding:7px 11px}
+ .classroom-shell .classroom-controls{min-height:61px;gap:8px;padding:8px 9px calc(8px + env(safe-area-inset-bottom,0px))}.classroom-shell .classroom-controls button{flex:1;min-width:0;min-height:42px;padding:8px 5px;gap:5px;font-size:11px;white-space:normal}.classroom-shell .classroom-controls button svg{flex-shrink:0;width:16px;height:16px}
+ .classroom-shell .classroom-notice{margin:7px 8px 0;padding:8px 10px;font-size:11px;gap:6px}.classroom-shell .classroom-notice button,.classroom-notice a{font-size:11px}
+}
+@media(max-width:400px){.classroom-identity small{display:none}.classroom-shell .classroom-status-chip:last-child{display:none}.classroom-shell .classroom-controls button{flex-direction:column;gap:2px;font-size:10px;line-height:1.2}.classroom-shell .classroom-grid{grid-template-rows:minmax(0,1fr) minmax(132px,25vh)}.classroom-remote-empty p{display:none}}
+@media(prefers-reduced-motion:reduce){.whiteboard-state-icon:not(.is-warning) svg{animation:none}}

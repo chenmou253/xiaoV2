@@ -3,6 +3,7 @@ import {ArrowLeft,ArrowRight,BookOpen,Check,ChevronLeft,ChevronRight,Headphones,
 import {booksAPI,type Accent,type Book,type BookPage,type PageContent,type PageGroup,type Segment,type Word} from './api';
 import Admin from './Admin';
 import AdminLogin from './AdminLogin';
+import {StudentHeader,StudentBottomNav} from './StudentChrome';
 import {StudentArea,TeacherArea,TeacherLogin} from './Learning';
 import DeviceCheck from './classroom/DeviceCheck';
 const Classroom=lazy(()=>import('./classroom/Classroom'));
@@ -44,10 +45,9 @@ export default function App(){
  useEffect(load,[load]);
  useEffect(()=>{const sync=()=>setSelected(routeBook());window.addEventListener('hashchange',sync);window.addEventListener('popstate',sync);return()=>{window.removeEventListener('hashchange',sync);window.removeEventListener('popstate',sync)}},[]);
  const books=state.kind==='ready'?state.books:[],book=books.find(item=>item.book_id===selected);
- return <main><Header leave={()=>{location.hash=''}}/>{book?<Reader book={book}/>:<Shelf state={state} onRetry={load}/>}</main>
+ return <main className={book?'':'student-shelf-page'}><StudentHeader onShelf={()=>{location.hash=''}}/>{book?<Reader book={book}/>:<><Shelf state={state} onRetry={load}/><StudentBottomNav active="shelf"/></>}</main>
 }
 
-function Header({leave}:{leave:()=>void}){return <header className="topbar"><button className="brand" onClick={leave} aria-label="回到书架"><span className="brand-icon"><BookOpen size={25}/></span><span>小小点读家<small>LITTLE READERS CLUB</small></span></button><a className="account-link" href="/account">学习中心</a></header>}
 
 function Shelf({state,onRetry}:{state:ShelfState;onRetry:()=>void}){
  return <div className="shelf"><div className="shelf-intro"><span className="eyebrow">MY LITTLE BOOKSHELF</span><h1>嗨，今天读哪一本？<span className="hello">☀</span></h1><p>选好课本，点一点，让英语开口说话。</p></div>

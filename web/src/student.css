@@ -1,0 +1,93 @@
+/* Shared public/student surfaces. Keep classroom and teacher workspace styles scoped separately. */
+.student-topbar{height:88px;background:#fffef9}
+.student-topbar .brand{text-decoration:none;color:#243e45}
+.student-topbar>nav{display:flex;align-items:center;gap:30px}
+.student-topbar>nav a{display:flex;align-items:center;gap:7px;text-decoration:none;color:#73857f;font-size:14px;padding:10px 0}
+.student-topbar>nav a[aria-current=page]{color:#337d70;font-weight:700}
+.student-bottom-nav{display:none}
+.student-center{min-height:100vh;background:#fffdf5;color:#243e45}
+.student-container{width:min(1120px,100%);margin:0 auto;padding:24px 28px 48px}
+.student-section-nav{display:flex;align-items:center;gap:8px;padding:0 0 18px;border-bottom:1px solid #e8eade;margin-bottom:32px}
+.student-section-nav a{padding:10px 18px;border-radius:12px;color:#72877d;font-size:14px;text-decoration:none;font-weight:600}
+.student-section-nav a:hover{background:#f0f5ec;color:#337d70}
+.student-section-nav a[aria-current=page]{color:#337d70;background:#e4f0e7}
+.student-content{min-width:0}
+.student-content h1,.student-content h2,.student-content p{margin:0}
+.student-content h1{font-size:30px;letter-spacing:-.6px;line-height:1.35;color:#243e45}
+.student-content h2{font-size:21px;line-height:1.45;color:#2b504a}
+.student-content a,.student-content button{-webkit-tap-highlight-color:transparent}
+.student-content button:focus-visible,.student-content a:focus-visible,.student-section-nav a:focus-visible,.student-bottom-nav a:focus-visible,.student-topbar a:focus-visible{outline:3px solid #e9813b;outline-offset:3px}
+.student-content input:focus-visible{outline:2px solid #398c82;outline-offset:2px}
+.student-primary,.student-secondary{display:inline-flex;justify-content:center;align-items:center;gap:8px;min-height:44px;padding:11px 18px;border:0;border-radius:12px;background:#398c82;color:white;text-decoration:none;font-size:15px;font-weight:700;line-height:1.5;box-shadow:0 3px 0 #297367;max-width:100%}
+.student-primary:hover{background:#2e7b71}.student-secondary{background:#edf3e9;color:#48776a;box-shadow:none}.student-secondary:hover{background:#e0eddf}
+.student-text-link{display:inline-flex;gap:5px;align-items:center;justify-content:center;padding:10px 0;border:0;background:none;color:#3e7e70;text-decoration:none;font-size:14px;min-height:44px;line-height:1.5}
+.student-text-link:hover{text-decoration:underline}
+.student-page-title{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:28px}
+.student-page-title p{font-size:15px;line-height:1.75;color:#74837e;margin-top:9px}
+.student-page-title>.student-secondary{flex-shrink:0}
+.student-welcome{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:8px 0 30px}
+.student-person{display:flex;align-items:center;gap:16px;min-width:0}.student-person>div{min-width:0}
+.student-welcome .eyebrow{display:block;margin-bottom:5px;font-size:10px;letter-spacing:1.6px}
+.student-welcome p{color:#74837e;margin-top:7px;font-size:15px}
+.student-avatar{flex:0 0 54px;width:54px;height:54px;display:grid;place-items:center;border-radius:50%;background:#e1eee3;color:#427d6c;font-size:23px;font-weight:700;overflow:hidden}
+.student-avatar img{display:block;width:100%;height:100%;object-fit:cover}.student-avatar.is-large{width:84px;height:84px;flex-basis:84px;font-size:32px}
+.student-dashboard-grid{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,1fr);gap:24px}
+.student-card{background:#fff;border:1px solid #dfe7dd;border-radius:22px;padding:26px;box-shadow:0 5px 0 #edf0e4;min-width:0}
+.student-card-label{display:flex;align-items:center;gap:8px;color:#779387;font-size:13px;font-weight:600;margin-bottom:22px}
+.student-card-label>svg{color:#548573;flex-shrink:0}
+.student-card-label>.student-badge{margin-left:auto}
+.student-next-class h2{font-size:24px;line-height:1.5}
+.student-next-class>p{color:#74837e;line-height:1.75;font-size:14px;margin:12px 0 22px}
+.student-next-class>small{display:block;color:#8a968c;font-size:12px;margin-top:18px;line-height:1.7}
+.student-card-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.student-reading-content{display:flex;align-items:center;gap:20px}.student-reading-content>div{min-width:0}
+.student-reading-content h2{font-size:21px}.student-reading-content p{color:#74837e;font-size:14px;line-height:1.7;margin:10px 0 20px}
+.student-book-art{flex:0 0 94px;min-height:132px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#dcece4;border-radius:7px 15px 15px 7px;border-left:6px solid #a6c8b8;box-shadow:4px 4px 0 #eceddd;color:#5b8f7c;transform:rotate(-4deg)}
+.student-book-art small{font-size:8px;letter-spacing:1px;font-weight:700}
+.student-stats{display:flex;gap:64px;margin-top:30px;padding:22px 4px;border-bottom:1px solid #e8eade}
+.student-stats>div{display:flex;align-items:center;gap:14px}.student-stats strong{font-size:29px;font-weight:750;color:#395f53}.student-stats strong small{font-size:13px;font-weight:400;margin-left:6px}.student-stats span{font-size:13px;color:#78887c}
+.student-gentle-note{display:flex;align-items:center;gap:9px;color:#92a08d;padding:25px 4px;font-size:13px}
+.student-message{padding:14px 17px;margin:16px 0!important;border-radius:12px;background:#eaf4e8;color:#426e53;font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.student-message.is-error{background:#fff0e9;color:#a34a2e}.student-message a{color:inherit;font-weight:600}
+.student-empty{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;background:#f3f6ed;border:1px dashed #cbdcc8;border-radius:22px;padding:48px 24px;color:#75947e}
+.student-empty h2{font-size:21px}.student-empty p{color:#74837e;font-size:14px;line-height:1.8}.student-empty .student-primary{margin-top:5px}
+.student-badge{display:inline-flex;align-items:center;justify-content:center;padding:5px 10px;border-radius:20px;background:#e8f3e9;color:#417e5c;font-size:12px;white-space:nowrap;font-weight:600}
+.student-badge.is-muted{background:#f1f2eb;color:#7a877d}
+.student-filters{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 24px}.student-filters button{border:1px solid #e2e8dd;background:#fffef9;color:#79887c;padding:10px 22px;border-radius:22px;min-height:44px;font-size:14px}.student-filters button[aria-pressed=true]{background:#e3efe4;color:#3c7963;border-color:#cfdfcc;font-weight:700}
+.student-lessons{display:grid;gap:18px}.student-lesson{display:grid;grid-template-columns:minmax(190px,1fr) minmax(0,1fr) auto;align-items:center;gap:22px}
+.student-lesson-date{display:grid;gap:8px}.student-lesson-date>span{font-size:13px;color:#819083}.student-lesson-date strong{font-size:23px;white-space:nowrap;color:#325b51}
+.student-lesson-info{min-width:0}.student-lesson-info h2{font-size:18px;overflow-wrap:anywhere}.student-lesson-info p{font-size:13px;color:#819083;margin-top:8px}.student-lesson-info small{display:block;color:#82917f;font-size:12px;line-height:1.8;margin-top:7px;overflow-wrap:anywhere}
+.student-lesson-action{display:flex;flex-direction:column;align-items:flex-end;gap:14px}.student-lesson-action .student-primary{font-size:14px}
+.student-teacher-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.student-teacher-card{display:flex;flex-direction:column;align-items:flex-start;text-decoration:none;color:#243e45;transition:transform .15s,border-color .15s}
+.student-teacher-card:hover{transform:translateY(-3px);border-color:#9fbeaa}
+.student-teacher-info{margin-top:18px;min-width:0;flex:1}.student-teacher-info h2{font-size:23px;overflow-wrap:anywhere}.student-teacher-info p{display:flex;align-items:center;gap:5px;color:#7d8d80;font-size:14px;margin:7px 0 12px}.student-teacher-info p svg{flex-shrink:0}.student-teacher-info>span{display:block;font-size:13px;color:#72907b}
+.student-teacher-link{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border-top:1px solid #eff1e8;margin-top:20px;padding-top:15px;color:#47816b;font-size:13px}.student-teacher-link svg{flex-shrink:0}
+.student-back{margin:-8px 0 20px}.student-detail-grid{display:grid;grid-template-columns:minmax(0,.88fr) minmax(0,1.2fr);gap:24px;align-items:start}
+.student-teacher-profile .student-person{align-items:flex-start}.student-teacher-profile h1{font-size:27px;overflow-wrap:anywhere}.student-teacher-profile .student-person p{display:flex;align-items:center;gap:4px;font-size:13px;color:#7d8d80;margin:8px 0 12px}.student-teacher-profile h2{font-size:17px;margin:28px 0 12px}.student-bio{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.9;color:#6a7e71;font-size:14px}
+.student-availability>p{font-size:13px;line-height:1.8;color:#7e8c80;margin-top:8px}.student-date-input{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 16px;font-size:14px;color:#587565}
+.student-content input{font:inherit;background:#fffef9;border:1px solid #d9e3d7;color:#355b4e;border-radius:11px;padding:11px 13px;min-width:0;max-width:100%}
+.student-date-input input{font-size:15px;max-width:210px;min-height:44px}
+.student-date-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:22px}.student-date-strip button{min-width:0;min-height:65px;display:grid;gap:5px;justify-items:center;align-content:center;border:1px solid #e1e7dc;border-radius:12px;background:#fbfcf6;color:#819181;padding:8px 3px}.student-date-strip span{font-size:12px}.student-date-strip strong{font-size:14px}.student-date-strip button[aria-pressed=true]{background:#e0eee1;border-color:#a7c6ad;color:#37724e}
+.student-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.student-slots button{background:#fff;border:1px solid #c3d8c5;color:#377955;border-radius:11px;min-height:46px;padding:10px 6px;font-size:16px;font-weight:600}.student-slots button:hover:not(:disabled){background:#e9f3e6;border-color:#719d76}
+.student-no-slots{text-align:center;padding:28px 14px;background:#f7f8f1;border-radius:14px;color:#8c9a84}.student-no-slots p{font-size:13px;line-height:1.8;margin-top:10px}
+.student-profile-form{max-width:780px}.student-profile-form fieldset{margin:0 0 24px;padding-top:12px}.student-profile-form legend{font-size:18px;font-weight:700;padding:0 8px;color:#3a6552}
+.student-profile-heading{display:flex;align-items:center;gap:14px;color:#80917c;font-size:13px;margin:8px 0 24px}.student-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}.student-form-grid label{display:flex;flex-direction:column;gap:9px;color:#55735e;font-size:14px;font-weight:600}.student-form-grid input{width:100%;font-size:16px;font-weight:400;min-height:46px}.student-form-grid small{font-size:12px;color:#899680;font-weight:400}
+.student-save-row{margin:6px 0 26px}.student-save-row button{min-width:150px}.student-account-settings{max-width:780px;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 4px;margin-top:30px;border-top:1px solid #e3e8da}.student-account-settings>div{min-width:0}.student-account-settings h2{font-size:15px}.student-account-settings p{margin-top:7px;font-size:13px;color:#87917e;overflow-wrap:anywhere}.student-account-settings button{flex-shrink:0}
+.student-account.account-shell{padding:0 0 40px;background:#fffdf5}.student-account .account-card{margin-top:48px;border-radius:22px;border-color:#dfe7dd;box-shadow:0 5px 0 #edf0e4}.student-account .account-card>.eyebrow{letter-spacing:1px;line-height:1.7}.student-account .account-mode-switch button{background:#f4f7ef;border-color:#dae5d9;color:#62806b}.student-account .account-mode-switch button.active{background:#398c82;border-color:#398c82;color:#fff}.student-account .account-card input{border-color:#d6e2d5;background:#fffef9;color:#355b4e;font-size:16px}.student-account.account-shell .admin-primary{background:#398c82!important;border:0;box-shadow:0 3px 0 #297367}.student-account .account-links button{color:#52846f}.student-account .account-card form>.admin-primary{width:100%}
+@media(max-width:1024px){.student-teacher-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.student-dashboard-grid{gap:18px}.student-reading-content{gap:14px}.student-book-art{flex-basis:76px;min-height:116px}.student-reading-content h2{font-size:19px}.student-detail-grid{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr)}.student-teacher-profile .student-person{flex-direction:column}.student-lesson{grid-template-columns:minmax(180px,1fr) minmax(0,1fr)}.student-lesson-action{grid-column:1/-1;flex-direction:row;justify-content:space-between;align-items:center;border-top:1px solid #eef0e5;padding-top:16px}}
+@media(max-width:760px){
+ .student-topbar{height:78px;padding:0 18px}.student-topbar .brand{font-size:18px;gap:9px}.student-topbar .brand-icon{width:39px;height:39px}.student-topbar .brand small{font-size:8px;letter-spacing:1.4px}.student-topbar>nav{gap:0}.student-topbar>nav a{font-size:12px}.student-topbar>nav a:first-child{display:none}.student-topbar>nav a svg{display:none}
+ .student-bottom-nav{position:fixed;z-index:30;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;border-top:1px solid #e4e8dc;background:#fffef9;padding:9px 12px calc(9px + env(safe-area-inset-bottom,0px));box-shadow:0 -3px 18px #3a554208}
+ .student-bottom-nav a{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;min-height:49px;text-decoration:none;color:#829081;font-size:11px;padding:4px;border-radius:12px}.student-bottom-nav a[aria-current=page]{color:#347661;background:#eaf2e6;font-weight:700}
+ .student-center,.student-shelf-page{padding-bottom:calc(82px + env(safe-area-inset-bottom,0px))}.student-container{padding:24px 16px 12px}.student-section-nav{display:none}.student-content h1{font-size:27px}.student-page-title{gap:12px;align-items:flex-start;margin-bottom:22px}.student-page-title p{font-size:13px;line-height:1.8}.student-page-title>.student-secondary{font-size:12px;padding:9px 11px}
+ .student-welcome{align-items:center;gap:10px;margin:2px 0 24px}.student-welcome .student-person{gap:12px}.student-welcome .student-avatar{width:46px;height:46px;flex-basis:46px}.student-welcome h1{font-size:25px;overflow-wrap:anywhere}.student-welcome p{font-size:13px}.student-welcome>.student-text-link{font-size:12px;flex-shrink:0}.student-welcome .eyebrow{font-size:8px;letter-spacing:1px}
+ .student-dashboard-grid{grid-template-columns:1fr;gap:20px}.student-card{border-radius:19px;padding:21px}.student-card-label{margin-bottom:17px}.student-next-class h2{font-size:22px}.student-next-class>p{font-size:14px;margin:10px 0 20px}.student-primary,.student-secondary{font-size:14px}.student-reading-content{gap:20px}.student-book-art{flex-basis:80px;min-height:110px}.student-reading-content h2{font-size:19px}.student-reading-content p{font-size:13px;margin:8px 0 15px}
+ .student-stats{gap:0;justify-content:space-between;margin-top:24px;padding:16px 4px 22px}.student-stats>div{display:block}.student-stats>div+div{border-left:1px solid #e3e8db;padding-left:24px}.student-stats strong{font-size:27px}.student-stats span{display:block;font-size:12px;margin-top:3px}.student-gentle-note{font-size:12px;padding:22px 4px}.student-empty{padding:36px 20px}.student-empty h2{font-size:19px}
+ .student-filters{gap:8px;margin-bottom:20px}.student-filters button{flex:1;padding:10px 12px}.student-lesson{grid-template-columns:1fr;gap:17px}.student-lesson-date strong{font-size:23px}.student-lesson-info h2{font-size:17px}.student-lesson-info p{margin-top:5px}.student-lesson-action .student-primary{min-width:130px}.student-lesson-action{grid-column:auto;gap:12px}
+ .student-teacher-grid{grid-template-columns:1fr;gap:19px}.student-teacher-card{display:grid;grid-template-columns:70px minmax(0,1fr);column-gap:18px;align-items:center}.student-teacher-card .student-avatar.is-large{width:70px;height:70px;flex-basis:70px}.student-teacher-info{margin:0}.student-teacher-info h2{font-size:21px}.student-teacher-info p{margin:4px 0 6px;font-size:13px}.student-teacher-link{grid-column:1/-1;margin-top:17px;padding-top:13px;font-size:13px}.student-teacher-info>span{font-size:12px}
+ .student-back{margin:-8px 0 16px}.student-detail-grid{grid-template-columns:1fr;gap:22px}.student-teacher-profile .student-person{flex-direction:row;align-items:center;gap:16px}.student-teacher-profile .student-avatar.is-large{width:76px;height:76px;flex-basis:76px}.student-teacher-profile h1{font-size:25px}.student-teacher-profile h2{margin-top:23px}.student-date-input{font-size:13px}.student-date-input input{max-width:185px;font-size:16px}.student-date-strip{gap:6px}.student-date-strip strong{font-size:13px}.student-slots{gap:9px}
+ .student-profile-form fieldset{padding:14px 18px 22px;margin-bottom:22px}.student-profile-form legend{font-size:17px}.student-profile-heading{font-size:12px;gap:12px}.student-form-grid{grid-template-columns:1fr;gap:20px}.student-save-row .student-primary{width:100%}.student-account-settings{margin-top:24px;align-items:flex-start;gap:10px}.student-account-settings p{font-size:12px}.student-account-settings .student-text-link{font-size:13px}
+ .student-account.account-shell{padding:0 0 28px}.student-account .account-card{width:calc(100% - 32px);margin-top:30px;padding:25px 22px}.student-account .account-card h1{font-size:25px}
+}
+@media(max-width:360px){.student-topbar{padding:0 12px}.student-topbar .brand{font-size:16px}.student-topbar .brand small{font-size:7px}.student-topbar>nav a{font-size:11px}.student-content h1{font-size:24px}.student-welcome .student-avatar{display:none}.student-book-art{flex-basis:62px;min-height:100px}.student-reading-content{gap:14px}.student-reading-content h2{font-size:18px}.student-page-title{flex-wrap:wrap}.student-stats>div+div{padding-left:18px}.student-date-input{flex-wrap:wrap}.student-date-input input{max-width:100%;width:100%}.student-card{padding:18px}}
