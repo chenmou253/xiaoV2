@@ -42,6 +42,8 @@ type Book struct {
 type Page struct {
 	Position    int    `json:"page"`
 	PrintedPage *int   `json:"printed_page"`
+	PageGroup   string `json:"page_group"`
+	PageLabel   string `json:"page_label"`
 	Title       string `json:"title"`
 	Unit        string `json:"unit"`
 	Image       string `json:"image"`
@@ -100,7 +102,7 @@ func Export(db *gorm.DB, resources *resource.Manager, bookID, destination string
 	for _, page := range pages {
 		imagePath := resource.WebPPath(page.ImagePath)
 		data.Pages = append(data.Pages, Page{
-			Position: page.Position, PrintedPage: page.PrintedPage, Title: page.Title,
+			Position: page.Position, PrintedPage: page.PrintedPage, PageGroup: page.PageGroup, PageLabel: page.PageLabel, Title: page.Title,
 			Unit: page.Unit, Image: imagePath, Content: page.ContentPath,
 			Interactive: page.Interactive, Preview: page.Preview,
 		})
@@ -158,6 +160,9 @@ func Validate(root string) (Bundle, error) {
 	for _, page := range data.Pages {
 		if page.Position < 1 || positions[page.Position] {
 			return data, fmt.Errorf("duplicate or invalid page %d", page.Position)
+		}
+		if !model.ValidPageGroup(page.PageGroup) || len(page.PageLabel) > 80 || (page.PrintedPage != nil && *page.PrintedPage < 1) {
+			return data, fmt.Errorf("page %d has invalid group or printed page", page.Position)
 		}
 		positions[page.Position] = true
 		for _, relative := range []string{page.Image, page.Content} {
@@ -318,7 +323,7 @@ func upsert(tx *gorm.DB, data Bundle) error {
 	}
 	for _, input := range data.Pages {
 		page := model.BookPage{BookID: data.Book.BookID, Position: input.Position,
-			PrintedPage: input.PrintedPage, Title: input.Title, Unit: input.Unit,
+			PrintedPage: input.PrintedPage, PageGroup: input.PageGroup, PageLabel: input.PageLabel, Title: input.Title, Unit: input.Unit,
 			ImagePath: input.Image, ContentPath: input.Content,
 			Interactive: input.Interactive, Preview: input.Preview}
 		if err = tx.Create(&page).Error; err != nil {

@@ -476,6 +476,17 @@ func (h *EditorHandler) SavePage(c *gin.Context) {
 	}
 	success(c, gin.H{"ok": true})
 }
+func (h *EditorHandler) SavePageLayout(c *gin.Context) {
+	var in service.PageLayoutInput
+	if !bindJSON(c, &in) {
+		return
+	}
+	if e := h.service.SavePageLayout(c.Request.Context(), c.Param("draftId"), in, identity(c).ID); e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
 func (h *EditorHandler) Order(c *gin.Context) {
 	var in struct {
 		Positions []int  `json:"positions"`

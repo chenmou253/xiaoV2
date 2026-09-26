@@ -116,15 +116,15 @@ func removePageFromAudioManifest(path string, page int) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	// Page cleanup must never delete shared word-cache files. A word cache entry
-	// is book-wide and can still be referenced by historical pages in database
-	// state even when an older/incomplete manifest no longer lists every
-	// reference. Page-specific sentence/failed-audio directories were already
-	// removed above. Shared word audio is only replaced explicitly by word
-	// regeneration/manual upload; orphan cleanup, if ever needed, must be a
-	// separate book-wide reconciliation pass.
+	// Page cleanup must never delete shared word or sentence cache files. A
+	// cache entry is book-wide and can still be referenced by historical pages
+	// in database state even when an older/incomplete manifest no longer lists
+	// every reference. Page-specific sentence/failed-audio directories were
+	// already removed above; orphan cleanup belongs in a separate book-wide
+	// reconciliation pass.
 	for file := range removedFiles {
-		if strings.HasPrefix(filepath.ToSlash(file), "word-cache/") {
+		relative := filepath.ToSlash(file)
+		if strings.HasPrefix(relative, "word-cache/") || strings.HasPrefix(relative, "sentence-cache/") {
 			continue
 		}
 		if target, ok := safeManifestTarget(ttsRoot, file); ok {

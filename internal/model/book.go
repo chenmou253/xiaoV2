@@ -32,6 +32,8 @@ type BookPage struct {
 	BookID      string    `gorm:"size:80;not null;uniqueIndex:uidx_book_pages_book_position,priority:1;index" json:"book_id"`
 	Position    int       `gorm:"not null;uniqueIndex:uidx_book_pages_book_position,priority:2" json:"position"`
 	PrintedPage *int      `json:"printed_page"`
+	PageGroup   string    `gorm:"size:24;not null;default:''" json:"page_group"`
+	PageLabel   string    `gorm:"size:80;not null;default:''" json:"page_label"`
 	Title       string    `gorm:"size:255;not null;default:''" json:"title"`
 	Unit        string    `gorm:"size:255;not null;default:''" json:"unit"`
 	ImagePath   string    `gorm:"size:255;not null" json:"-"`

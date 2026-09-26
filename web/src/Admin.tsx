@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type AdminBook, type AIModel, type AIModelSettings, type AIVoice, type Identity, type SiteSetting } from "./api";
+import { api, type AdminBook, type AIModel, type AIModelSettings, type AIVoice, type Identity, type PageGroup, type SiteSetting } from "./api";
 import AudioReviewPage from "./AudioReviewPage";
 import DraftPageEditor from "./DraftPageEditor";
 import "./admin-job-progress.css";
 
 type Row = Record<string, any>;
 type ToastState = { message: string; kind: "success" | "error" } | null;
+const pageGroupNames: Record<PageGroup, string> = {
+  cover: "封面", front: "首页", title: "扉页", contents: "目录", body: "正文", appendix: "附录", other: "其他",
+};
+function pageLayoutName(page: Row) {
+  const group = pageGroupNames[page.page_group as PageGroup];
+  if (!group) return "未分组";
+  if (page.page_label) return `${group} · ${page.page_label}`;
+  if (page.printed_page != null) return `${group} · 第 ${page.printed_page} 页`;
+  return group;
+}
 type Tab =
   | "drafts"
   | "audio-review"
@@ -830,6 +840,11 @@ function Drafts({
     ),
     [page, setPage] = useState<any>(null),
     [raw, setRaw] = useState(""),
+    [layoutStart, setLayoutStart] = useState(1),
+    [layoutEnd, setLayoutEnd] = useState(1),
+    [layoutGroup, setLayoutGroup] = useState<PageGroup | "">("body"),
+    [layoutNumbering, setLayoutNumbering] = useState<"keep" | "clear" | "sequence">("sequence"),
+    [layoutPrintedStart, setLayoutPrintedStart] = useState(1),
     [waitingPage, setWaitingPage] = useState(0),
     [translationSubmitting, setTranslationSubmitting] = useState(false),
     [audioRestartSubmitting, setAudioRestartSubmitting] = useState(false),
@@ -1304,6 +1319,25 @@ function Drafts({
     const latest = await loadDetail();
     notice(message);
     return latest;
+  }
+  async function savePageLayout() {
+    if (!detail || !editableDraft || layoutStart > layoutEnd || layoutStart < 1 || (layoutNumbering === "sequence" && layoutPrintedStart < 1)) {
+      throw new Error("请填写有效的页面范围和起始页码");
+    }
+    await api(`/admin/drafts/${id}/page-layout`, {
+      method: "PUT",
+      body: JSON.stringify({
+        version: detail.draft.version,
+        start: layoutStart,
+        end: layoutEnd,
+        page_group: layoutGroup,
+        numbering: layoutNumbering,
+        printed_start: layoutNumbering === "sequence" ? layoutPrintedStart : null,
+      }),
+    });
+    await loadDetail(id, pageNo);
+    if (pageNo >= layoutStart && pageNo <= layoutEnd) await loadPage();
+    notice(`文件第 ${layoutStart}–${layoutEnd} 页的分组已更新`);
   }
   async function regenerateAudioItem(itemID: string, accent: "en-US" | "en-GB", kind: "sentence" | "word", text: string) {
     if (!detail || !page || processing) return;
@@ -1894,6 +1928,25 @@ function Drafts({
               <button onClick={() => void deleteDraft()}>删除草稿</button>
             )}
           </div>
+          {detail.pages.length > 0 && editableDraft && can("content.write") && (
+            <section className="page-layout-tools" aria-label="批量设置页面分组与书内页码">
+              <strong>批量设置页面结构</strong>
+              <p className="admin-note">这里的页数是 PDF 文件页序。设置正文起点时，选择“连续编号”并填书内起始页码；只改分组和页码，不重新生成 OCR 或音频。</p>
+              <div className="form-grid">
+                <label>文件起始页<input type="number" min={1} max={lastPage} value={layoutStart} onChange={(e) => setLayoutStart(Number(e.target.value))}/></label>
+                <label>文件结束页<input type="number" min={1} max={lastPage} value={layoutEnd} onChange={(e) => setLayoutEnd(Number(e.target.value))}/></label>
+                <label>页面分组<select value={layoutGroup} onChange={(e) => setLayoutGroup(e.target.value as PageGroup | "")}>
+                  <option value="">不展示此页</option>
+                  {Object.entries(pageGroupNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select></label>
+                <label>书内页码<select value={layoutNumbering} onChange={(e) => setLayoutNumbering(e.target.value as "keep" | "clear" | "sequence")}>
+                  <option value="sequence">连续编号</option><option value="clear">清除页码和标签</option><option value="keep">保留现有页码</option>
+                </select></label>
+                {layoutNumbering === "sequence" && <label>书内起始页码<input type="number" min={1} value={layoutPrintedStart} onChange={(e) => setLayoutPrintedStart(Number(e.target.value))}/></label>}
+                <button disabled={processing || layoutStart < 1 || layoutEnd > lastPage || layoutEnd < layoutStart} onClick={() => void run(savePageLayout)}>应用到选中范围</button>
+              </div>
+            </section>
+          )}
           {detail.pages.length > 0 && (
             <div className="draft-grid">
               <aside className="draft-page-sidebar">
@@ -1938,7 +1991,7 @@ function Drafts({
                         onClick={() => setPageNo(item.position)}
                         title={`${item.checked ? "文字已锁定" : "文字未锁定"} · ${item.ocr_model || detail.draft.ocr_model || "local-paddleocr"} / ${item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")} / ${item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}`}
                       >
-                        <span>第 {item.position} 页</span>
+                        <span>文件 {item.position} · {pageLayoutName(item)}</span>
                         <small>
                           {!item.checked
                             ? "文字待审核"
@@ -1953,7 +2006,7 @@ function Drafts({
                 {detail.pages.find((item: Row) => item.position === pageNo) && (() => {
                   const item = detail.pages.find((entry: Row) => entry.position === pageNo)!;
                   return <div className="draft-page-detail">
-                    <strong>第 {item.position} 页详情</strong>
+                    <strong>文件第 {item.position} 页 · {pageLayoutName(item)}</strong>
                     <small>OCR：{item.ocr_model || detail.draft.ocr_model || "local-paddleocr"}</small>
                     <small>翻译：{item.checked ? (item.translation_model || detail.draft.translation_model || "qwen3.7-flash") : (detail.draft.translation_model || "qwen3.7-flash")}</small>
                     <small>TTS：{item.tts_model || detail.draft.tts_model || "local-qwen3-tts"}</small>
@@ -1963,10 +2016,11 @@ function Drafts({
               {page && (
                 <div>
                   <label>
-                    标题
+                    页面标题（选填）
                     <input
                       disabled={processing}
                       value={page.title}
+                      placeholder="留空时显示页面分组或书内页码"
                       onChange={(e) =>
                         setPage({ ...page, title: e.target.value })
                       }
@@ -1982,6 +2036,14 @@ function Drafts({
                       }
                     />
                   </label>
+                  <div className="form-grid page-layout-fields">
+                    <label>页面分组<select disabled={processing} value={page.page_group || ""} onChange={(e) => setPage({ ...page, page_group: e.target.value })}>
+                      <option value="">不展示此页</option>
+                      {Object.entries(pageGroupNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select></label>
+                    <label>书内数字页码<input disabled={processing} type="number" min={1} value={page.printed_page ?? ""} placeholder="可留空" onChange={(e) => setPage({ ...page, printed_page: e.target.value === "" ? null : Number(e.target.value) })}/></label>
+                    <label>自定义页码标签<input disabled={processing} maxLength={80} value={page.page_label || ""} placeholder="如 A-1、目录上" onChange={(e) => setPage({ ...page, page_label: e.target.value })}/></label>
+                  </div>
                   <DraftPageEditor
                     content={page.content}
                     image={page.image}

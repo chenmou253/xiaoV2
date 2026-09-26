@@ -298,7 +298,7 @@ func (s *EditorService) RegenerateAudioItem(ctx context.Context, id string, page
 		job := model.TextbookJob{
 			DraftID: id, Kind: "audio-item", Page: page, ItemID: itemID, Accent: accent,
 			ModelID: selected.ID, Provider: selected.Provider, VoiceID: voiceID,
-			Status: "queued", Total: 1, Priority: 100,
+			Status: "queued", Total: 1, Priority: 100, SkipCache: true,
 		}
 		if err := tx.Create(&job).Error; err != nil {
 			return err

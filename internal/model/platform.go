@@ -135,6 +135,8 @@ type TextbookDraftPage struct {
 	DraftID        string `gorm:"size:36;not null;uniqueIndex:uidx_draft_page" json:"draft_id"`
 	Position       int    `gorm:"not null;uniqueIndex:uidx_draft_page" json:"position"`
 	PrintedPage    *int   `json:"printed_page"`
+	PageGroup      string `gorm:"size:24;not null;default:''" json:"page_group"`
+	PageLabel      string `gorm:"size:80;not null;default:''" json:"page_label"`
 	Title          string `gorm:"size:255;not null" json:"title"`
 	Unit           string `gorm:"size:255;not null" json:"unit"`
 	ImagePath      string `gorm:"size:500;not null" json:"-"`
@@ -189,6 +191,7 @@ type TextbookJob struct {
 	ModelID     string     `gorm:"size:64;not null;default:'';index" json:"model_id"`
 	Provider    string     `gorm:"size:32;not null;default:''" json:"provider"`
 	RequestID   string     `gorm:"size:191;not null;default:''" json:"request_id"`
+	SkipCache   bool       `gorm:"not null;default:false" json:"-"`
 	Status      string     `gorm:"size:32;not null;index;index:idx_job_claim,priority:1" json:"status"`
 	Progress    int        `gorm:"not null" json:"progress"`
 	Total       int        `gorm:"not null" json:"total"`
