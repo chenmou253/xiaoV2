@@ -35,8 +35,15 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.AuthThrottle{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookTranslationItem{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
+	if err := db.AutoMigrate(&model.Book{}, &model.BookPage{}, &model.Student{}, &model.Admin{}, &model.Teacher{}, &model.StudentProfile{}, &model.Role{}, &model.Permission{}, &model.RolePermission{}, &model.AdminRole{}, &model.StudentSession{}, &model.AdminSession{}, &model.TeacherSession{}, &model.StudentEmailToken{}, &model.AdminEmailToken{}, &model.TeacherEmailToken{}, &model.AuthThrottle{}, &model.TeacherAvailability{}, &model.TeacherTimeOff{}, &model.Lesson{}, &model.LessonPresenceSegment{}, &model.LessonRequest{}, &model.SiteSetting{}, &model.AuditLog{}, &model.PageVersion{}, &model.TextbookDraft{}, &model.TextbookDraftPage{}, &model.TextbookTranslationItem{}, &model.TextbookJob{}, &model.TextbookAudioItem{}, &model.TextbookAudioAttempt{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
+	}
+	// Existing teacher/student schedules are reinterpreted in China time, which
+	// is now the single scheduling timezone for the whole classroom system.
+	for _, table := range []string{"teachers", "student_profiles", "teacher_availabilities"} {
+		if err := db.Table(table).Where("timezone <> ? OR timezone IS NULL", "Asia/Shanghai").Update("timezone", "Asia/Shanghai").Error; err != nil {
+			return fmt.Errorf("normalize %s timezone: %w", table, err)
+		}
 	}
 	return seed(db)
 }
@@ -45,7 +52,7 @@ func seed(db *gorm.DB) error {
 	if err := removeUnassignedEmptyBuiltinRoles(db); err != nil {
 		return err
 	}
-	permissions := map[string]string{"admin.access": "进入后台", "rbac.read": "查看角色权限", "rbac.write": "管理角色权限", "site_settings.read": "查看网站设置", "site_settings.write": "修改网站设置", "content.read": "查看教材", "content.write": "编辑教材", "content.review": "审核教材", "content.publish": "发布教材", "users.read": "查看学生", "users.write": "启停学生", "audit.read": "查看操作日志"}
+	permissions := map[string]string{"admin.access": "进入后台", "rbac.read": "查看角色权限", "rbac.write": "管理角色权限", "site_settings.read": "查看网站设置", "site_settings.write": "修改网站设置", "content.read": "查看教材", "content.write": "编辑教材", "content.review": "审核教材", "content.publish": "发布教材", "users.read": "查看学生", "users.write": "启停学生", "teachers.read": "查看外教", "teachers.write": "管理外教和排班", "lessons.read": "查看课程", "lessons.write": "管理排课", "lessons.cancel": "取消课程", "audit.read": "查看操作日志"}
 	roles := map[string][]string{"superadmin": {}, "editor": {"admin.access", "content.read", "content.write"}, "reviewer": {"admin.access", "content.read", "content.review"}, "publisher": {"admin.access", "content.read", "content.publish"}, "support": {"admin.access", "users.read", "users.write"}}
 	descriptions := map[string]string{"superadmin": "超级管理员", "editor": "教材编辑", "reviewer": "教材审核", "publisher": "发布管理员", "support": "学生客服"}
 	for code, description := range permissions {

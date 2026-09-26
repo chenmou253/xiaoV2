@@ -16,6 +16,7 @@ import (
 func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras ...any) *gin.Engine {
 	var platform *handler.PlatformHandler
 	var editor *handler.EditorHandler
+	var classroom *handler.ClassroomHandler
 	var origin string
 	for _, extra := range extras {
 		switch value := extra.(type) {
@@ -23,6 +24,8 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 			platform = value
 		case *handler.EditorHandler:
 			editor = value
+		case *handler.ClassroomHandler:
+			classroom = value
 		case string:
 			origin = value
 		}
@@ -44,6 +47,9 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	if classroom != nil {
+		r.GET("/uploads/teacher-avatars/:name", classroom.TeacherAvatar)
+	}
 	api := r.Group("/api/v1")
 	if platform != nil {
 		api.Use(platform.Authenticate())
@@ -55,6 +61,35 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		api.POST("/auth/forgot", platform.Forgot)
 		api.POST("/auth/reset", platform.Reset)
 		api.GET("/config", platform.Config)
+		api.GET("/teacher/me", platform.Me)
+		api.POST("/teacher/auth/login", platform.Login)
+		api.POST("/teacher/auth/logout", platform.Logout)
+		api.POST("/teacher/auth/forgot", platform.Forgot)
+		api.POST("/teacher/auth/reset", platform.Reset)
+	}
+	if platform != nil && classroom != nil {
+		student := api.Group("", platform.RequireKind("student"))
+		student.GET("/student/dashboard", classroom.Dashboard)
+		student.GET("/student/profile", classroom.StudentProfile)
+		student.PATCH("/student/profile", classroom.SaveStudentProfile)
+		student.GET("/lessons", classroom.Lessons)
+		student.GET("/lessons/:id", classroom.Lesson)
+		student.GET("/teachers", classroom.Teachers)
+		student.GET("/teachers/:id/availability", classroom.Slots)
+		student.POST("/bookings", classroom.Book)
+		student.POST("/classrooms/:id/join", classroom.Join)
+		student.POST("/classrooms/:id/presence", classroom.Presence)
+		student.POST("/classrooms/:id/leave", classroom.Presence)
+		teacher := api.Group("/teacher", platform.RequireKind("teacher"))
+		teacher.GET("/profile", classroom.TeacherProfile)
+		teacher.PATCH("/profile", classroom.SaveTeacherProfile)
+		teacher.GET("/lessons", classroom.Lessons)
+		teacher.GET("/schedule", classroom.TeacherSchedule)
+		teacher.GET("/lessons/:id", classroom.Lesson)
+		teacher.GET("/statistics", classroom.Statistics)
+		teacher.POST("/classrooms/:id/join", classroom.Join)
+		teacher.POST("/classrooms/:id/presence", classroom.Presence)
+		teacher.POST("/classrooms/:id/leave", classroom.Presence)
 	}
 	api.GET("/books", books.List)
 	api.GET("/books/:bookId", books.Get)
@@ -82,6 +117,22 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		admin.POST("/roles", platform.Require("rbac.write"), platform.SaveRole)
 		admin.PUT("/accounts/:id/roles", platform.Require("rbac.write"), platform.AssignRoles)
 		admin.GET("/students", platform.Require("users.read"), platform.Students)
+		if classroom != nil {
+			admin.GET("/teachers", platform.Require("teachers.read"), classroom.Teachers)
+			admin.POST("/teachers", platform.Require("teachers.write"), classroom.CreateTeacher)
+			admin.PATCH("/teachers/:id", platform.Require("teachers.write"), classroom.UpdateTeacher)
+			admin.POST("/teachers/:id/avatar", platform.Require("teachers.write"), classroom.UploadTeacherAvatar)
+			admin.GET("/teachers/:id/availability", platform.Require("teachers.read"), classroom.Availability)
+			admin.GET("/teachers/:id/schedule-conflicts", platform.Require("teachers.read"), classroom.ScheduleConflicts)
+			admin.POST("/teachers/:id/availability", platform.Require("teachers.write"), classroom.ReplaceAvailability)
+			admin.GET("/teachers/:id/time-off", platform.Require("teachers.read"), classroom.TimeOff)
+			admin.POST("/teachers/:id/time-off", platform.Require("teachers.write"), classroom.AddTimeOff)
+			admin.GET("/teachers/:id/statistics", platform.Require("lessons.read"), classroom.Statistics)
+			admin.GET("/lessons", platform.Require("lessons.read"), classroom.Lessons)
+			admin.GET("/students/:id/profile", platform.Require("users.read"), classroom.AdminStudentProfile)
+			admin.POST("/lessons", platform.Require("lessons.write"), classroom.Book)
+			admin.POST("/lessons/:id/cancel", platform.Require("lessons.cancel"), classroom.Cancel)
+		}
 		admin.PUT("/students/:id/status", platform.Require("users.write"), platform.StudentStatus)
 		admin.GET("/site-settings", platform.Require("site_settings.read"), platform.SiteSettings)
 		admin.PUT("/site-settings/:id/status", platform.Require("site_settings.write"), platform.UpdateSiteSettingStatus)
@@ -175,7 +226,7 @@ func securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "same-origin")
-		c.Header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'")
+		c.Header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob: https://*.netless.link; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://sdk.whiteboard.sd-rtn.com; worker-src 'self' blob:; connect-src 'self' https://*.agora.io wss://*.agora.io https://*.sd-rtn.com wss://*.sd-rtn.com https://*.rtnsvc.com wss://*.rtnsvc.com https://*.rtesvc.com wss://*.rtesvc.com https://*.netless.link wss://*.netless.link")
 		c.Next()
 	}
 }

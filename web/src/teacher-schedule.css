@@ -1,0 +1,51 @@
+.teacher-schedule-page,.teacher-booking-detail{color:#244b43;max-width:1100px;margin:0 auto}
+.teacher-schedule-heading{display:flex;align-items:end;justify-content:space-between;gap:22px;margin:4px 0 24px}
+.teacher-schedule-eyebrow{display:block;margin-bottom:7px;color:#57917b;font-size:12px;font-weight:800;letter-spacing:1.5px}
+.teacher-schedule-heading h1{margin:0;font-size:31px;line-height:1.35;color:#244b43}
+.teacher-schedule-heading p{margin:8px 0 0;color:#71877c;font-size:14px;line-height:1.6}
+.teacher-schedule-date{display:grid;gap:8px;flex-shrink:0;color:#58766a;font-size:13px;font-weight:700}
+.teacher-schedule-date>div{display:flex;align-items:center;gap:7px}
+.teacher-schedule-date button,.teacher-schedule-date input{height:42px;border:1px solid #cbded2;border-radius:10px;background:#fff;color:#285748}
+.teacher-schedule-date button{width:42px;display:grid;place-items:center;cursor:pointer}
+.teacher-schedule-date input{min-width:166px;padding:0 12px;font:inherit}
+.teacher-schedule-date button:hover{background:#e9f4ec}
+.teacher-schedule-date button:focus-visible,.teacher-schedule-date input:focus-visible,.teacher-slot-card:focus-visible,.teacher-detail-back:focus-visible,.teacher-detail-action:focus-visible{outline:3px solid #e9813b;outline-offset:3px}
+.teacher-schedule-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;padding:17px 19px;border:1px solid #dce9e0;border-radius:16px;background:#fff}
+.teacher-schedule-summary>div{display:flex;align-items:center;gap:9px;min-width:0}
+.teacher-schedule-summary svg{color:#3b8a71;flex-shrink:0}.teacher-schedule-summary strong{font-size:17px}
+.teacher-schedule-summary span{border-radius:999px;background:#e8f3e9;color:#3d8163;padding:4px 9px;font-size:11px;font-weight:700}
+.teacher-schedule-summary small{color:#71877c;font-size:12px;white-space:nowrap}
+.teacher-schedule-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.teacher-slot-card{display:flex;flex-direction:column;gap:19px;min-height:148px;padding:19px 18px;border:1px solid #dce9e0;border-radius:17px;background:#fff;box-shadow:0 4px 0 #eaf0e8;color:#244b43;text-decoration:none;min-width:0}
+a.teacher-slot-card{transition:transform .15s,border-color .15s,box-shadow .15s}
+a.teacher-slot-card:hover{transform:translateY(-2px);border-color:#68ab90;box-shadow:0 7px 0 #e0eee5}
+.teacher-slot-card.is-booked{border-color:#e8b8b2;background:#fffafa;box-shadow:0 4px 0 #f7e8e5}
+.teacher-slot-time{display:flex;align-items:center;gap:8px;white-space:nowrap;color:#2b5c4d}
+.teacher-slot-time svg{color:#68a487;flex-shrink:0}.teacher-slot-time strong{font-size:19px;letter-spacing:-.5px}
+.teacher-slot-badge{align-self:flex-start;display:inline-flex;align-items:center;border-radius:999px;padding:6px 11px;font-size:12px;font-weight:800;background:#eef3ed;color:#76867b}
+.teacher-slot-badge.is-booked{background:#fde7e5;color:#b42318}.teacher-slot-badge.is-open{background:#eff5e9;color:#5b8663}.teacher-slot-badge.is-time_off{background:#f5eee6;color:#9b7955}
+.teacher-slot-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;color:#789084}
+.teacher-slot-bottom small{font-size:12px;line-height:1.4}.teacher-slot-bottom svg{color:#3c8d73;flex-shrink:0}
+.teacher-schedule-message{border:1px solid #dce9e0;border-radius:14px;padding:16px 18px;background:#fff;color:#5b776a;line-height:1.6}
+.teacher-schedule-message.is-error{border-color:#f0d5cd;background:#fff4ef;color:#a34b39}
+.teacher-schedule-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;min-height:245px;padding:30px;border:1px dashed #c9decf;border-radius:18px;background:#fff;text-align:center;color:#6e907b}
+.teacher-schedule-empty h2{margin:6px 0 0;font-size:20px;color:#345f4f}.teacher-schedule-empty p{margin:0;font-size:13px;line-height:1.7}
+.teacher-detail-back{display:inline-flex;align-items:center;gap:7px;margin:0 0 25px;color:#317e65;text-decoration:none;font-size:14px;font-weight:700}
+.teacher-detail-back:hover{text-decoration:underline}
+.teacher-detail-card{max-width:760px;border:1px solid #dce9e0;border-radius:20px;background:#fff;box-shadow:0 5px 0 #eaf0e8;padding:28px}
+.teacher-detail-top{display:flex;align-items:center;justify-content:space-between;gap:15px;padding-bottom:20px;border-bottom:1px solid #e8efe9}.teacher-detail-top small{color:#8a9b90}
+.teacher-detail-student{display:flex;align-items:center;gap:16px;margin:25px 0}.teacher-detail-student>span{display:grid;place-items:center;width:60px;height:60px;flex-shrink:0;border-radius:18px;background:#e5f2e9;color:#4d9675}.teacher-detail-student small{color:#81948a;font-size:12px}.teacher-detail-student h2{margin:5px 0 0;font-size:22px;color:#285749}
+.teacher-detail-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:19px 28px;margin:0;padding:23px 0;border-top:1px solid #e8efe9;border-bottom:1px solid #e8efe9}.teacher-detail-facts div{min-width:0}.teacher-detail-facts dt{color:#83978a;font-size:12px;margin-bottom:8px}.teacher-detail-facts dd{margin:0;color:#2a5749;font-size:16px;font-weight:700;line-height:1.5}
+.teacher-detail-note{padding:20px 0 0}.teacher-detail-note strong{font-size:13px;color:#6f8b7c}.teacher-detail-note p{margin:8px 0 0;color:#3e6254;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.teacher-detail-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;margin-top:25px;padding:10px 17px;border-radius:11px;background:#318675;color:#fff;text-decoration:none;font-size:14px;font-weight:700}.teacher-detail-action:hover{background:#267765}
+@media(max-width:700px){.teacher-schedule-heading{align-items:stretch;flex-direction:column;gap:20px}.teacher-schedule-heading h1{font-size:27px}.teacher-schedule-date>div{width:100%}.teacher-schedule-date input{flex:1;min-width:0;width:100%}.teacher-schedule-summary{align-items:flex-start;flex-direction:column;gap:8px}.teacher-schedule-summary strong{font-size:15px}.teacher-schedule-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.teacher-slot-card{padding:16px 13px;min-height:142px;gap:15px}.teacher-slot-time{gap:5px}.teacher-slot-time strong{font-size:15px}.teacher-slot-time svg{width:15px}.teacher-detail-card{padding:20px}.teacher-detail-facts{grid-template-columns:1fr 1fr;gap:17px}.teacher-detail-facts dd{font-size:14px}}
+@media(max-width:390px){.teacher-schedule-grid{grid-template-columns:1fr}.teacher-slot-card{min-height:125px}.teacher-detail-facts{grid-template-columns:1fr}}
+.teacher-language-switch{display:inline-flex;align-items:center;gap:3px;padding:3px;border:1px solid #cbded2;border-radius:999px;background:#fff;flex-shrink:0}
+.teacher-language-switch button{border:0;border-radius:999px;padding:7px 11px;background:transparent;color:#386959;font-size:12px;font-weight:800;cursor:pointer}
+.teacher-language-switch button[aria-pressed="true"]{background:#2f806d;color:#fff}
+.teacher-language-switch button:focus-visible{outline:3px solid #e9813b;outline-offset:2px}
+.teacher-workspace-toolbar{display:flex;justify-content:flex-end;margin:-12px 0 14px}
+.teacher-login-top{display:flex;align-items:center;justify-content:space-between;gap:16px;max-width:900px;margin:0 auto 40px}
+.teacher-login .teacher-login-top .admin-brand{margin:0}
+.teacher-device-top{display:flex;align-items:center;justify-content:space-between;gap:16px}
+@media(max-width:700px){.teacher-workspace-toolbar{margin:0 0 16px}.teacher-login-top{margin-bottom:26px}.teacher-language-switch button{padding:8px 10px}.teacher-detail-card{overflow-wrap:anywhere}}

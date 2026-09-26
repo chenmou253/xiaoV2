@@ -1,0 +1,126 @@
+import {useEffect,useState} from 'react';
+import {api,type Identity} from './api';
+import Account from './Account';
+import {ArrowLeft,ArrowRight,BookOpen,CalendarDays,ChevronRight,LogOut,MapPin,Plus,Sprout} from 'lucide-react';
+import {StudentHeader,StudentBottomNav} from './StudentChrome';
+import {TeacherBookingDetail,TeacherSchedulePage} from './TeacherSchedule';
+import {TeacherLanguageSwitch,teacherClassCount,teacherDateTime,teacherError,teacherStatus,teacherText,useTeacherLanguage} from './teacher-i18n';
+
+type Teacher={id:number;email?:string;display_name:string;country:string;avatar?:string;bio:string;lesson_duration_minutes:number;active?:boolean};
+type Lesson={id:number;student_id:number;teacher_id:number;student_name:string;teacher_name:string;scheduled_start_at:string;scheduled_end_at:string;duration_minutes:number;status:string;teaching_seconds:number;cancel_reason:string;actual_start_at:string|null;actual_end_at:string|null};
+type Stats={completed_lessons:number;teaching_seconds:number;student_no_show:number;teacher_no_show:number;cancelled:number};
+type Profile={display_name:string;avatar:string;grade:number;parent_name:string;parent_email:string};
+const statusName:Record<string,string>={scheduled:'待上课',in_progress:'上课中',completed:'已完成',teacher_no_show:'老师未参加',student_no_show:'未参加',cancelled:'已取消',expired:'已过期'};
+const chinaZone='Asia/Shanghai';
+const fmt=(value:string)=>new Intl.DateTimeFormat('zh-CN',{timeZone:chinaZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value));
+const localDate=()=>new Intl.DateTimeFormat('en-CA',{timeZone:chinaZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+function navLink(label:string,url:string){return <a href={url} className={location.pathname===url||(url==='/teacher/lessons'&&location.pathname.startsWith('/teacher/lessons/'))?'active':''}>{label}</a>}
+function Frame({children,email}:{children:React.ReactNode;email:string}){const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);return <main className="learning-shell"><aside><a className="learning-logo" href="/">小小点读家 <small>{t('外教工作台')}</small></a><nav>{navLink(t('首页'),'/teacher')}{navLink(t('我的课程'),'/teacher/lessons')}{navLink(t('我的课时'),'/teacher/statistics')}{navLink(t('我的资料'),'/teacher/profile')}</nav><small>{email}</small><button onClick={async()=>{await api('/teacher/auth/logout',{method:'POST'});location.assign('/teacher/login')}}>{t('退出登录')}</button></aside><section className="learning-main"><div className="teacher-workspace-toolbar"><TeacherLanguageSwitch/></div>{children}</section></main>}
+
+function StudentFrame({children}:{children:React.ReactNode}){
+ const path=location.pathname,booking=path==='/account/booking'||path.startsWith('/account/teachers/');
+ const links=[['/account','学习概览'],['/account/lessons','我的课程'],['/account/booking','预约外教'],['/account/profile','我的资料']];
+ return <main className="student-center"><StudentHeader center/><div className="student-container"><nav className="student-section-nav" aria-label="学习中心导航">{links.map(([href,label])=><a key={href} href={href} aria-current={(path===href||(href==='/account/booking'&&booking))?'page':undefined}>{label}</a>)}</nav><section className="student-content">{children}</section></div><StudentBottomNav active={booking?'booking':path==='/account/lessons'?'courses':'account'}/></main>;
+}
+function StudentMessage({children,error=false}:{children:React.ReactNode;error?:boolean}){return <p className={`student-message${error?' is-error':''}`} role={error?'alert':'status'}>{children}</p>}
+function StudentEmpty({title,children}:{title:string;children?:React.ReactNode}){return <div className="student-empty"><BookOpen size={30}/><h2>{title}</h2>{children}</div>}
+function StudentPageTitle({title,description,children}:{title:string;description?:string;children?:React.ReactNode}){return <div className="student-page-title"><div><h1>{title}</h1>{description&&<p>{description}</p>}</div>{children}</div>}
+function StudentAvatar({name,src,large=false}:{name:string;src?:string;large?:boolean}){const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);return <span className={`student-avatar${large?' is-large':''}`}>{src&&!failed?<img src={src} alt={`${name}的头像`} onError={()=>setFailed(true)}/>:name.slice(0,1)||'同'}</span>}
+
+export function StudentArea(){
+ const [me,setMe]=useState<Identity|null|undefined>(undefined);
+ useEffect(()=>{api<{user:Identity|null}>('/me').then(v=>setMe(v.user)).catch(()=>setMe(null))},[]);
+ if(me===undefined)return <StudentFrame><StudentMessage>正在打开学习中心…</StudentMessage></StudentFrame>;
+ if(!me||new URLSearchParams(location.search).has('mode'))return <Account/>;
+ const path=location.pathname,teacherMatch=path.match(/^\/account\/teachers\/(\d+)$/);
+ return <StudentFrame>{teacherMatch?<TeacherBookingProfile teacherID={Number(teacherMatch[1])}/>:path==='/account/booking'?<Booking/>:path==='/account/lessons'?<StudentLessons/>:path==='/account/profile'?<StudentProfile email={me.email}/>:<StudentDashboard/>}</StudentFrame>;
+}
+
+function StudentDashboard(){
+ const [data,setData]=useState<{profile:Profile;next_lesson:Lesson|null;month_stats:Stats}|null>(null),[error,setError]=useState('');
+ useEffect(()=>{api<typeof data>('/student/dashboard').then(setData).catch(e=>setError(e.message))},[]);
+ if(error)return <StudentMessage error>{error}</StudentMessage>;
+ if(!data)return <StudentMessage>正在加载你的学习安排…</StudentMessage>;
+ const next=data.next_lesson,name=data.profile.display_name||'同学',minutes=Math.round((data.month_stats.teaching_seconds||0)/60);
+ return <><div className="student-welcome"><div className="student-person"><StudentAvatar name={name} src={data.profile.avatar}/><div><span className="eyebrow">MY LEARNING SPACE</span><h1>嗨，{name}</h1><p>今天也来读一点、说一点。</p></div></div><a className="student-text-link" href="/account/profile">编辑资料 <ChevronRight size={16}/></a></div>
+ <div className="student-dashboard-grid"><article className="student-card student-next-class"><div className="student-card-label"><CalendarDays size={18}/>下一节外教课{next&&<span className="student-badge">{statusName[next.status]||'待上课'}</span>}</div>{next?<><h2>{fmt(next.scheduled_start_at)}</h2><p>{next.teacher_name||`外教 #${next.teacher_id}`} · {next.duration_minutes} 分钟</p><div className="student-card-actions"><a className="student-primary" href={`/classroom/${next.id}/check`}>课前准备 <ArrowRight size={18}/></a><a className="student-text-link" href="/account/lessons">查看课程</a></div><small>先检查摄像头和麦克风，轻松开始上课。</small></>:<><h2>约一节课，开口说英语</h2><p>选择喜欢的老师，安排合适的上课时间。</p><a className="student-primary" href="/account/booking">预约外教课 <ArrowRight size={18}/></a></>}</article>
+ <article className="student-card student-reading-card"><div className="student-card-label"><BookOpen size={18}/>我的点读书架</div><div className="student-reading-content"><span className="student-book-art" aria-hidden="true"><BookOpen size={46}/><small>READ & SPEAK</small></span><div><h2>小手点一点，英语读出来</h2><p>听单词、读句子，按自己的节奏学。</p><a className="student-secondary" href="/">去书架点读 <ArrowRight size={18}/></a></div></div></article></div>
+ <section className="student-stats" aria-label="本月外教学习"><div><strong>{data.month_stats.completed_lessons}<small>节</small></strong><span>本月完成外教课</span></div><div><strong>{minutes}<small>分钟</small></strong><span>本月外教课时长</span></div></section><div className="student-gentle-note"><Sprout size={20}/><span>一点好奇心，一点新发现。</span></div></>;
+}
+
+function StudentLessons(){
+ const [rows,setRows]=useState<Lesson[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[filter,setFilter]=useState('upcoming');
+ useEffect(()=>{api<Lesson[]|null>('/lessons').then(v=>setRows(v??[])).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[]);
+ const upcoming=(l:Lesson)=>['scheduled','in_progress'].includes(l.status);
+ const shown=rows.filter(l=>filter==='upcoming'?upcoming(l):filter==='completed'?l.status==='completed':!upcoming(l)&&l.status!=='completed').sort((a,b)=>filter==='upcoming'?Date.parse(a.scheduled_start_at)-Date.parse(b.scheduled_start_at):Date.parse(b.scheduled_start_at)-Date.parse(a.scheduled_start_at));
+ return <><StudentPageTitle title="我的课程" description="每一次开口，都是一点进步。"><a className="student-secondary" href="/account/booking"><Plus size={17}/>预约新课程</a></StudentPageTitle><div className="student-filters" aria-label="课程状态">{[['upcoming','待上课'],['completed','已完成'],['other','其他']].map(([key,label])=><button key={key} type="button" aria-pressed={filter===key} onClick={()=>setFilter(key)}>{label}</button>)}</div>{error?<StudentMessage error>{error}</StudentMessage>:loading?<StudentMessage>正在加载课程…</StudentMessage>:shown.length===0?<StudentEmpty title={filter==='upcoming'?'还没有待上的课程':'这里还没有课程记录'}><p>{filter==='upcoming'?'挑选一位老师，开启英语对话吧。':'课程记录会按照上课状态显示在这里。'}</p>{filter==='upcoming'&&<a className="student-primary" href="/account/booking">预约外教课</a>}</StudentEmpty>:<div className="student-lessons">{shown.map(l=><article className="student-card student-lesson" key={l.id}><div className="student-lesson-date"><span>{new Intl.DateTimeFormat('zh-CN',{timeZone:chinaZone,year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date(l.scheduled_start_at))}</span><strong>{bookingTime(l.scheduled_start_at)} – {bookingTime(l.scheduled_end_at)}</strong></div><div className="student-lesson-info"><h2>{l.teacher_name||`外教 #${l.teacher_id}`}</h2><p>1v1 英语课 · {l.duration_minutes} 分钟</p>{l.status==='completed'&&<small>实际共同在线 {Math.round(l.teaching_seconds/60)} 分钟</small>}{l.status==='cancelled'&&l.cancel_reason&&<small>取消原因：{l.cancel_reason}</small>}</div><div className="student-lesson-action"><span className={`student-badge ${upcoming(l)?'':'is-muted'}`}>{statusName[l.status]||l.status}</span>{upcoming(l)&&<a className="student-primary" href={`/classroom/${l.id}/check`}>课前准备 <ArrowRight size={16}/></a>}</div></article>)}</div>}</>;
+}
+
+function Booking(){
+ const [teachers,setTeachers]=useState<Teacher[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);
+ useEffect(()=>{api<Teacher[]|null>('/teachers').then(value=>setTeachers(value??[])).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[]);
+ return <><StudentPageTitle title="预约外教" description="认识一位老师，开始一段英语对话。"/>{error?<StudentMessage error>{error}</StudentMessage>:loading?<StudentMessage>正在寻找开放预约的老师…</StudentMessage>:teachers.length===0?<StudentEmpty title="老师们正在安排新的课程"><p>目前没有开放预约的外教，请稍后再来看看。</p></StudentEmpty>:<div className="student-teacher-grid">{teachers.map(t=><a className="student-card student-teacher-card" href={`/account/teachers/${t.id}`} key={t.id}><StudentAvatar large name={t.display_name} src={t.avatar}/><div className="student-teacher-info"><h2>{t.display_name}</h2><p><MapPin size={14}/>{t.country||'国家/地区未填写'}</p><span>{t.lesson_duration_minutes||30} 分钟 / 节</span></div><div className="student-teacher-link">查看资料与可约时间 <ArrowRight size={18}/></div></a>)}</div>}</>;
+}
+
+type BookingSlot={start_at:string;end_at:string;available:boolean};
+const bookingTime=(value:string)=>new Intl.DateTimeFormat('zh-CN',{timeZone:chinaZone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(value));
+function chinaDayOffset(days:number){const date=new Date(`${localDate()}T00:00:00+08:00`);date.setUTCDate(date.getUTCDate()+days);return new Intl.DateTimeFormat('en-CA',{timeZone:chinaZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date)}
+
+function TeacherBookingProfile({teacherID}:{teacherID:number}){
+ const [teacher,setTeacher]=useState<Teacher|null>(null),[day,setDay]=useState(()=>localDate()),[slots,setSlots]=useState<BookingSlot[]>([]),[loadingTeacher,setLoadingTeacher]=useState(true),[loadingSlots,setLoadingSlots]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[slotError,setSlotError]=useState(''),[notice,setNotice]=useState(''),[refresh,setRefresh]=useState(0);
+ useEffect(()=>{const controller=new AbortController();api<Teacher[]|null>('/teachers',controller.signal).then(rows=>{const match=(rows??[]).find(item=>item.id===teacherID);if(!match)throw new Error('该外教目前未开放预约');setTeacher(match)}).catch(e=>{if(e.name!=='AbortError')setError(e.message)}).finally(()=>{if(!controller.signal.aborted)setLoadingTeacher(false)});return()=>controller.abort()},[teacherID]);
+ useEffect(()=>{if(!teacher||!day)return;const controller=new AbortController();setSlotError('');setSlots([]);setLoadingSlots(true);api<{slots:BookingSlot[]}>(`/teachers/${teacherID}/availability?date=${day}`,controller.signal).then(v=>setSlots(v.slots||[])).catch(e=>{if(e.name!=='AbortError')setSlotError(e.message)}).finally(()=>{if(!controller.signal.aborted)setLoadingSlots(false)});return()=>controller.abort()},[teacherID,day,teacher?.id,refresh]);
+ async function book(slot:BookingSlot){if(!teacher||busy)return;if(!window.confirm(`确认预约 ${teacher.display_name} 的 ${day} ${bookingTime(slot.start_at)} 课程（${teacher.lesson_duration_minutes||30} 分钟）？`))return;setBusy(true);setSlotError('');setNotice('');try{await api('/bookings',{method:'POST',body:JSON.stringify({teacher_id:teacherID,start_at:slot.start_at,duration_minutes:teacher.lesson_duration_minutes||30,idempotency_key:crypto.randomUUID()})});setNotice('预约成功，课程已加入“我的课程”。');setRefresh(v=>v+1)}catch(e){setSlotError((e as Error).message)}finally{setBusy(false)}}
+ return <><a className="student-text-link student-back" href="/account/booking"><ArrowLeft size={17}/>返回外教列表</a>{error&&<StudentMessage error>{error}</StudentMessage>}{loadingTeacher&&!error&&<StudentMessage>正在加载老师资料…</StudentMessage>}{teacher&&<><div className="student-detail-grid"><section className="student-card student-teacher-profile"><div className="student-person"><StudentAvatar large name={teacher.display_name} src={teacher.avatar}/><div><h1>{teacher.display_name}</h1><p><MapPin size={15}/>{teacher.country||'国家/地区未填写'}</p><span className="student-badge">{teacher.lesson_duration_minutes||30} 分钟 / 节</span></div></div><h2>认识老师</h2><p className="student-bio">{teacher.bio||'这位外教还没有填写个人介绍。'}</p></section><section className="student-card student-availability"><h2>选择上课时间</h2><p>选一个适合孩子的时间，轻松开始。</p><label className="student-date-input">预约日期<input type="date" value={day} min={localDate()} max={chinaDayOffset(14)} disabled={busy} onChange={e=>{setDay(e.target.value||localDate());setNotice('')}}/></label><div className="student-date-strip" aria-label="快捷选择日期">{Array.from({length:5},(_,i)=>{const date=chinaDayOffset(i);return <button key={date} type="button" disabled={busy} aria-pressed={day===date} onClick={()=>{setDay(date);setNotice('')}}><span>{i===0?'今天':new Intl.DateTimeFormat('zh-CN',{timeZone:chinaZone,weekday:'short'}).format(new Date(`${date}T00:00:00+08:00`))}</span><strong>{date.slice(5).replace('-','/')}</strong></button>})}</div>{notice&&<StudentMessage>{notice} <a href="/account/lessons">查看我的课程 →</a></StudentMessage>}{slotError&&<StudentMessage error>{slotError}</StudentMessage>}{loadingSlots?<StudentMessage>正在查询可预约时间…</StudentMessage>:slots.some(s=>s.available)?<div className="student-slots">{slots.filter(s=>s.available).map(s=><button key={s.start_at} disabled={busy} onClick={()=>void book(s)} aria-label={`预约 ${day} ${bookingTime(s.start_at)}`}>{bookingTime(s.start_at)}</button>)}</div>:!slotError&&<div className="student-no-slots"><CalendarDays size={24}/><p>当天没有可预约时段，换个日期看看吧。</p></div>}{busy&&<StudentMessage>正在预约，请稍候…</StudentMessage>}</section></div></>}</>;
+}
+
+function StudentProfile({email}:{email:string}){
+ const [p,setP]=useState<Profile|null>(null),[error,setError]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[loggingOut,setLoggingOut]=useState(false);
+ useEffect(()=>{api<Profile>('/student/profile').then(setP).catch(e=>setError(e.message))},[]);
+ async function save(e:React.FormEvent){e.preventDefault();if(!p||busy)return;setBusy(true);setError('');setMessage('');try{setP(await api<Profile>('/student/profile',{method:'PATCH',body:JSON.stringify(p)}));setMessage('资料已保存')}catch(err){setError((err as Error).message)}finally{setBusy(false)}}
+ async function logout(){setLoggingOut(true);setError('');try{await api('/auth/logout',{method:'POST'});location.assign('/account?mode=login')}catch(err){setError((err as Error).message);setLoggingOut(false)}}
+ return <><StudentPageTitle title="我的资料" description="完善孩子和家长的信息，让学习安排更顺畅。"/>{error&&<StudentMessage error>{error}</StudentMessage>}{message&&<StudentMessage>{message}</StudentMessage>}{!p&&!error&&<StudentMessage>正在加载资料…</StudentMessage>}{p&&<form className="student-profile-form" onSubmit={save}><fieldset className="student-card"><legend>个人资料</legend><div className="student-profile-heading"><StudentAvatar name={p.display_name||'同学'} src={p.avatar}/><span>今天又是充满好奇心的一天。</span></div><div className="student-form-grid"><label>姓名<input required maxLength={120} autoComplete="name" value={p.display_name||''} onChange={e=>setP({...p,display_name:e.target.value})}/></label><label>年级<input type="number" min="0" max="12" step="1" value={p.grade||0} onChange={e=>setP({...p,grade:Number(e.target.value)})}/><small>0 表示未设置年级</small></label></div></fieldset><fieldset className="student-card"><legend>家长信息</legend><div className="student-form-grid"><label>家长姓名<input maxLength={120} value={p.parent_name||''} onChange={e=>setP({...p,parent_name:e.target.value})}/></label><label>家长邮箱<input type="email" maxLength={254} autoComplete="email" value={p.parent_email||''} onChange={e=>setP({...p,parent_email:e.target.value})}/></label></div></fieldset><div className="student-save-row"><button className="student-primary" disabled={busy}>{busy?'正在保存…':'保存资料'}</button></div></form>}<section className="student-account-settings"><div><h2>登录账号</h2><p>{email}</p></div><button className="student-text-link" type="button" disabled={loggingOut} onClick={()=>void logout()}><LogOut size={16}/>{loggingOut?'正在退出…':'退出登录'}</button></section></>;
+}
+
+export function TeacherLogin(){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ const params=new URLSearchParams(location.search),[mode,setMode]=useState(params.get('mode')||'login'),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
+ async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{await api<{message?:string}>(`/teacher/auth/${mode}`,{method:'POST',body:JSON.stringify({email,password,token:params.get('token')||''})});if(mode==='login'){location.assign('/teacher');return}setMessage(mode==='forgot'?'请查收密码重置邮件':'操作成功');if(mode==='reset')setMode('login')}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+ return <main className="account-shell teacher-login"><div className="teacher-login-top"><a className="admin-brand" href="/">小小点读家 <span>{t('外教工作台')}</span></a><TeacherLanguageSwitch/></div><section className="account-card"><h1>{t(mode==='login'?'外教登录':mode==='forgot'?'找回密码':'设置密码')}</h1>{error&&<p className="admin-error">{teacherError(language,error)}</p>}{message&&<p className="admin-success">{t(message)}</p>}<form onSubmit={submit}>{mode!=='reset'&&<label>{t('邮箱')}<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label>}{mode!=='forgot'&&<label>{t('密码')}<input type="password" required minLength={mode==='reset'?10:undefined} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)}/></label>}<button className="admin-primary" disabled={busy}>{t(busy?'处理中…':'确认')}</button></form><button className="link-button" onClick={()=>{setMode(mode==='login'?'forgot':'login');setError('');setMessage('')}}>{t(mode==='login'?'找回密码':'返回登录')}</button></section></main>;
+}
+
+export function TeacherArea(){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ const [me,setMe]=useState<Identity|null|undefined>(undefined);
+ useEffect(()=>{api<{user:Identity|null}>('/teacher/me').then(v=>setMe(v.user)).catch(()=>setMe(null))},[]);
+ if(me===undefined)return <main className="admin-loading">{t('正在加载外教工作台…')}</main>;
+ if(!me)return <TeacherLogin/>;
+ const path=location.pathname;
+ const detail=path.match(/^\/teacher\/lessons\/(\d+)$/);
+ return <Frame email={me.email}>{detail?<TeacherBookingDetail lessonID={Number(detail[1])}/>:path==='/teacher/lessons'?<TeacherSchedulePage/>:path==='/teacher/statistics'?<TeacherStats/>:path==='/teacher/profile'?<TeacherProfile/>:<TeacherHome/>}</Frame>;
+}
+
+function TeacherHome(){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ const [rows,setRows]=useState<Lesson[]>([]),[stats,setStats]=useState<Stats|null>(null),[error,setError]=useState('');
+ useEffect(()=>{void api<Lesson[]|null>('/teacher/lessons').then(v=>setRows(v??[])).catch(e=>setError((e as Error).message));void api<Stats>(`/teacher/statistics?month=${localDate().slice(0,7)}`).then(setStats).catch(e=>setError((e as Error).message))},[]);
+ const today=localDate();const current=rows.filter(l=>new Intl.DateTimeFormat('en-CA',{timeZone:chinaZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(l.scheduled_start_at))===today);
+ return <><h1>{t('今天的课程')}</h1>{error&&<p className="admin-error">{teacherError(language,error)}</p>}<div className="learning-cards"><article><small>{t('今天')}</small><h2>{teacherClassCount(language,current.length)}</h2></article><article><small>{t('本月已完成')}</small><h2>{teacherClassCount(language,stats?.completed_lessons||0)}</h2></article><article><small>{t('授课时间')}</small><h2>{Math.round((stats?.teaching_seconds||0)/60)} {t('分钟')}</h2></article></div><LessonCards rows={current}/></>;
+}
+function LessonCards({rows}:{rows:Lesson[]}){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ return <div className="lesson-list">{rows.map(l=><article key={l.id}><strong>{teacherDateTime(language,l.scheduled_start_at)}</strong><span>{l.student_name||`${t('学生')} #${l.student_id}`} · {l.duration_minutes} {t('分钟')}</span><span>{teacherStatus(language,l.status)}</span>{l.status==='completed'&&<small>{t('实际共同在线')} {Math.round(l.teaching_seconds/60)} {t('分钟')}</small>}{l.status==='cancelled'&&l.cancel_reason&&<small>{t('取消原因：')}{l.cancel_reason}</small>}{['scheduled','in_progress'].includes(l.status)&&<a href={`/teacher/classroom/${l.id}/check`}>{t('设备检测 / 进入课堂 →')}</a>}</article>)}{rows.length===0&&<p>{t('暂无课程。')}</p>}</div>;
+}
+function TeacherStats(){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ const [month,setMonth]=useState(localDate().slice(0,7)),[stats,setStats]=useState<Stats|null>(null),[error,setError]=useState('');
+ useEffect(()=>{api<Stats>(`/teacher/statistics?month=${month}`).then(setStats).catch(e=>setError((e as Error).message))},[month]);
+ return <><h1>{t('我的课时')}</h1><label>{t('月份')} <input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label>{error&&<p className="admin-error">{teacherError(language,error)}</p>}<div className="learning-cards"><article><small>{t('已完成')}</small><h2>{teacherClassCount(language,stats?.completed_lessons||0)}</h2></article><article><small>{t('实际授课')}</small><h2>{Math.round((stats?.teaching_seconds||0)/60)} {t('分钟')}</h2></article><article><small>{t('学生缺席')}</small><h2>{teacherClassCount(language,stats?.student_no_show||0)}</h2></article><article><small>{t('取消')}</small><h2>{teacherClassCount(language,stats?.cancelled||0)}</h2></article></div></>;
+}
+function TeacherProfile(){
+ const language=useTeacherLanguage(),t=(value:string)=>teacherText(language,value);
+ const [p,setP]=useState<Teacher|null>(null),[error,setError]=useState(''),[message,setMessage]=useState('');
+ useEffect(()=>{api<Teacher>('/teacher/profile').then(setP).catch(e=>setError((e as Error).message))},[]);
+ async function save(e:React.FormEvent){e.preventDefault();if(!p)return;try{setP(await api<Teacher>('/teacher/profile',{method:'PATCH',body:JSON.stringify({display_name:p.display_name,bio:p.bio})}));setMessage('资料已保存')}catch(err){setError((err as Error).message)}}
+ return <><h1>{t('我的资料')}</h1>{error&&<p className="admin-error">{teacherError(language,error)}</p>}{message&&<p className="admin-success">{t(message)}</p>}{p&&<form className="learning-form" onSubmit={save}><label>{t('姓名')}<input value={p.display_name} onChange={e=>setP({...p,display_name:e.target.value})}/></label><label>{t('国家')}<input value={p.country} disabled/></label><label>{t('个人简介')}<textarea value={p.bio||''} onChange={e=>setP({...p,bio:e.target.value})}/></label><button className="admin-primary">{t('保存资料')}</button></form>}</>;
+}

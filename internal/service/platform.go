@@ -35,8 +35,8 @@ func conflict(message string) *AppError { return &AppError{409, 40900, message} 
 func notFound(message string) *AppError { return &AppError{404, 40400, message} }
 
 type PlatformService struct {
-	repo           *repository.PlatformRepository
-	cfg            config.Config
+	repo                   *repository.PlatformRepository
+	cfg                    config.Config
 	ttsModelSwitch         func(oldModel, newModel string) error
 	translationModelSwitch func(oldModel, newModel string) error
 }
@@ -60,6 +60,9 @@ func normalizeEmail(s string) string {
 	return s
 }
 func validPassword(s string) bool { return utf8.RuneCountInString(s) >= 10 && len(s) <= 72 }
+func validAccountKind(kind string) bool {
+	return kind == "student" || kind == "teacher" || kind == "admin"
+}
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, e := rand.Read(b); e != nil {
@@ -69,12 +72,15 @@ func randomToken() (string, error) {
 }
 
 func (s *PlatformService) Authenticate(ctx context.Context, kind, raw string) (repository.Identity, error) {
-	if len(raw) != 64 {
+	if !validAccountKind(kind) || len(raw) != 64 {
 		return repository.Identity{}, gorm.ErrRecordNotFound
 	}
 	return s.repo.ResolveSession(ctx, kind, raw)
 }
 func (s *PlatformService) Login(ctx context.Context, kind, email, password, remote string) (repository.Identity, string, error) {
+	if !validAccountKind(kind) {
+		return repository.Identity{}, "", bad("账号类型无效")
+	}
 	email = normalizeEmail(email)
 	if email == "" || password == "" {
 		return repository.Identity{}, "", bad("邮箱或密码错误")
@@ -103,6 +109,9 @@ func (s *PlatformService) Login(ctx context.Context, kind, email, password, remo
 	return identity, raw, e
 }
 func (s *PlatformService) Logout(ctx context.Context, kind, raw string) error {
+	if !validAccountKind(kind) {
+		return bad("账号类型无效")
+	}
 	if raw == "" {
 		return nil
 	}
@@ -137,6 +146,9 @@ func (s *PlatformService) Verify(ctx context.Context, token string) error {
 	return nil
 }
 func (s *PlatformService) Forgot(ctx context.Context, kind, email string) error {
+	if !validAccountKind(kind) {
+		return bad("账号类型无效")
+	}
 	email = normalizeEmail(email)
 	if email == "" {
 		return nil
@@ -155,6 +167,9 @@ func (s *PlatformService) Forgot(ctx context.Context, kind, email string) error 
 	return e
 }
 func (s *PlatformService) Reset(ctx context.Context, kind, token, password string) error {
+	if !validAccountKind(kind) {
+		return bad("账号类型无效")
+	}
 	if len(token) != 64 || !validPassword(password) {
 		return bad("重置链接无效，或密码不足10个字符")
 	}
@@ -178,12 +193,18 @@ func (s *PlatformService) issueToken(ctx context.Context, kind, purpose string, 
 	path := "account"
 	if kind == "admin" {
 		path = "admin/login"
+	} else if kind == "teacher" {
+		path = "teacher/login"
 	}
 	link := fmt.Sprintf("%s/%s?mode=%s&token=%s", s.cfg.AppOrigin, path, purpose, raw)
 	subject, body := "验证邮箱", "请打开以下链接完成邮箱验证：\n"+link
 	if purpose == "reset" {
 		subject = "重置密码"
 		body = "请打开以下链接重置密码（1小时内有效）：\n" + link
+	}
+	if kind == "teacher" {
+		subject = "Set your teacher account password"
+		body = "Open this link to set or reset your teacher account password (valid for 1 hour):\n" + link
 	}
 	if e = s.sendMail(email, subject, body); e != nil {
 		return "", e
@@ -216,14 +237,18 @@ func (s *PlatformService) EmailMode() string {
 	return "disabled"
 }
 func (s *PlatformService) Config(ctx context.Context) (map[string]any, error) {
-	return map[string]any{"email_enabled": s.EmailMode() != "disabled", "email_mode": s.EmailMode()}, nil
+	return map[string]any{
+		"email_enabled":                     s.EmailMode() != "disabled",
+		"email_mode":                        s.EmailMode(),
+		"classroom_debug_allow_early_entry": s.cfg.ClassroomDebugEarlyEntry,
+	}, nil
 }
 func (s *PlatformService) RBAC(ctx context.Context) (repository.RBACData, error) {
 	return s.repo.RBAC(ctx)
 }
 
 var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,39}$`)
-var KnownPermissions = map[string]bool{"admin.access": true, "rbac.read": true, "rbac.write": true, "site_settings.read": true, "site_settings.write": true, "content.read": true, "content.write": true, "content.review": true, "content.publish": true, "users.read": true, "users.write": true, "audit.read": true}
+var KnownPermissions = map[string]bool{"admin.access": true, "rbac.read": true, "rbac.write": true, "site_settings.read": true, "site_settings.write": true, "content.read": true, "content.write": true, "content.review": true, "content.publish": true, "users.read": true, "users.write": true, "teachers.read": true, "teachers.write": true, "lessons.read": true, "lessons.write": true, "lessons.cancel": true, "audit.read": true}
 
 func (s *PlatformService) SaveRole(ctx context.Context, role model.Role, perms []string, actor uint64) (uint64, error) {
 	if !rolePattern.MatchString(role.Name) || role.Name == "superadmin" || len(role.Description) > 255 {

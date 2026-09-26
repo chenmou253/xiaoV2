@@ -5,5 +5,9 @@ import './styles.css';
 import './admin.css';
 import './editor.css';
 import './frontend.css';
+import './classroom.css';
+import './student.css';
+import './classroom-theme.css';
+import './teacher-schedule.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
