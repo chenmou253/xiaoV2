@@ -313,7 +313,7 @@ class AudioGenerator:
                       emit: Callable[[dict], None] | None = None,
                       item_id: str = "", accent: str = "", retry_variant: int = 0,
                       voices: dict[str, str] | None = None,
-                      mode: str = "replace-page") -> dict:
+                      mode: str = "replace-page", skip_cache: bool = False) -> dict:
         import soundfile as sf
 
         emit = emit or (lambda _event: None)
@@ -494,11 +494,11 @@ class AudioGenerator:
                 continue
 
             reusable = None
-            if word_cache_key:
+            if not skip_cache and word_cache_key:
                 reusable = self._reusable_word(
                     manifest, output, word_cache_key, normalized_word(item.text),
                 )
-            elif sentence_cache_key:
+            elif not skip_cache and sentence_cache_key:
                 reusable = self._reusable_sentence(
                     manifest, output, sentence_cache_key, item,
                 )
@@ -729,6 +729,7 @@ def daemon() -> None:
                 voices=({str(key): str(value) for key, value in request["voices"].items()}
                         if "voices" in request else None),
                 mode=str(request.get("mode", "replace-page")),
+                skip_cache=bool(request.get("skip_cache", False)),
             )
             print(json.dumps({"done": True, "summary": summary}, ensure_ascii=False), flush=True)
         except PageAudioError as exc:

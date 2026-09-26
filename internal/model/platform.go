@@ -191,6 +191,7 @@ type TextbookJob struct {
 	ModelID     string     `gorm:"size:64;not null;default:'';index" json:"model_id"`
 	Provider    string     `gorm:"size:32;not null;default:''" json:"provider"`
 	RequestID   string     `gorm:"size:191;not null;default:''" json:"request_id"`
+	SkipCache   bool       `gorm:"not null;default:false" json:"-"`
 	Status      string     `gorm:"size:32;not null;index;index:idx_job_claim,priority:1" json:"status"`
 	Progress    int        `gorm:"not null" json:"progress"`
 	Total       int        `gorm:"not null" json:"total"`

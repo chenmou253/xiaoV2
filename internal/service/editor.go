@@ -2310,8 +2310,8 @@ func (s *EditorService) generatePageAudio(ctx context.Context, d model.TextbookD
 func (s *EditorService) runAudioDaemon(ctx context.Context, job *model.TextbookJob, d model.TextbookDraft, work string, page int) error {
 	mode := "replace-page"
 	if job.Kind == "audio-item" {
-		// Single-item regeneration checks the book's ready audio cache first;
-		// the generator synthesizes only when no reusable item is available.
+		// Both single-item workflows use the replace-item path; SkipCache
+		// distinguishes direct editor regeneration from issue-page retry.
 		mode = "replace-item"
 	} else if job.Kind == "audio" {
 		// Keep existing enabled-accent audio and fill only gaps, e.g. when an
@@ -2390,6 +2390,7 @@ func (s *EditorService) runAudioDaemonMode(ctx context.Context, job *model.Textb
 	if job.Kind == "audio-item" {
 		request["item_id"], request["accent"] = job.ItemID, job.Accent
 		request["retry_variant"] = job.ID
+		request["skip_cache"] = job.SkipCache
 	}
 	raw, _ := json.Marshal(request)
 	if _, e := fmt.Fprintf(audioIn, "%s\n", raw); e != nil {
