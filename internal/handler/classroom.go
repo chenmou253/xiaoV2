@@ -340,6 +340,22 @@ func (h *ClassroomHandler) Lessons(c *gin.Context) {
 	}
 	success(c, rows)
 }
+func (h *ClassroomHandler) TeacherSchedule(c *gin.Context) {
+	kind, id, ok := actor(c)
+	if !ok {
+		return
+	}
+	if kind != "teacher" {
+		failure(c, 403, 40300, "无权查看此排班")
+		return
+	}
+	rows, e := h.service.TeacherSchedule(c.Request.Context(), id, c.Query("date"))
+	if e != nil {
+		writePlatformError(c, e)
+		return
+	}
+	success(c, rows)
+}
 func (h *ClassroomHandler) Lesson(c *gin.Context) {
 	kind, id, ok := actor(c)
 	if !ok {

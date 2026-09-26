@@ -84,6 +84,7 @@ func New(db *gorm.DB, books *handler.BookHandler, webRoot, mode string, extras .
 		teacher.GET("/profile", classroom.TeacherProfile)
 		teacher.PATCH("/profile", classroom.SaveTeacherProfile)
 		teacher.GET("/lessons", classroom.Lessons)
+		teacher.GET("/schedule", classroom.TeacherSchedule)
 		teacher.GET("/lessons/:id", classroom.Lesson)
 		teacher.GET("/statistics", classroom.Statistics)
 		teacher.POST("/classrooms/:id/join", classroom.Join)

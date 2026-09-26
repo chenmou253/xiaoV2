@@ -6,6 +6,7 @@ import AdminLogin from './AdminLogin';
 import {StudentHeader,StudentBottomNav} from './StudentChrome';
 import {StudentArea,TeacherArea,TeacherLogin} from './Learning';
 import DeviceCheck from './classroom/DeviceCheck';
+import {teacherLanguage,teacherText} from './teacher-i18n';
 const Classroom=lazy(()=>import('./classroom/Classroom'));
 
 type ShelfState={kind:'loading'}|{kind:'error';message:string}|{kind:'ready';books:Book[]};
@@ -34,7 +35,7 @@ export default function App(){
  const studentClass=path.match(/^\/classroom\/(\d+)(\/check)?$/);
  if(studentClass)return studentClass[2]?<DeviceCheck role="student" id={Number(studentClass[1])}/>:<Suspense fallback={<main className="admin-loading">正在加载课堂…</main>}><Classroom role="student" id={Number(studentClass[1])}/></Suspense>;
  const teacherClass=path.match(/^\/teacher\/classroom\/(\d+)(\/check)?$/);
- if(teacherClass)return teacherClass[2]?<DeviceCheck role="teacher" id={Number(teacherClass[1])}/>:<Suspense fallback={<main className="admin-loading">正在加载课堂…</main>}><Classroom role="teacher" id={Number(teacherClass[1])}/></Suspense>;
+ if(teacherClass)return teacherClass[2]?<DeviceCheck role="teacher" id={Number(teacherClass[1])}/>:<Suspense fallback={<main className="admin-loading">{teacherText(teacherLanguage(),'正在加载课堂…')}</main>}><Classroom role="teacher" id={Number(teacherClass[1])}/></Suspense>;
  if(path==='/teacher/login')return <TeacherLogin/>;
  if(path==='/teacher'||path.startsWith('/teacher/'))return <TeacherArea/>;
  if(path==='/account'||path.startsWith('/account/'))return <StudentArea/>;

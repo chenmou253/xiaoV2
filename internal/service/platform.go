@@ -202,6 +202,10 @@ func (s *PlatformService) issueToken(ctx context.Context, kind, purpose string, 
 		subject = "重置密码"
 		body = "请打开以下链接重置密码（1小时内有效）：\n" + link
 	}
+	if kind == "teacher" {
+		subject = "Set your teacher account password"
+		body = "Open this link to set or reset your teacher account password (valid for 1 hour):\n" + link
+	}
 	if e = s.sendMail(email, subject, body); e != nil {
 		return "", e
 	}

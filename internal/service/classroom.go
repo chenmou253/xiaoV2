@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"sort"
 	"strings"
 	"time"
 
@@ -353,6 +354,14 @@ type Slot struct {
 	Available bool      `json:"available"`
 }
 
+type TeacherScheduleSlot struct {
+	StartAt      time.Time `json:"start_at"`
+	EndAt        time.Time `json:"end_at"`
+	State        string    `json:"state"`
+	LessonID     uint64    `json:"lesson_id,omitempty"`
+	LessonStatus string    `json:"lesson_status,omitempty"`
+}
+
 type availabilityWindow struct {
 	weekday     int
 	startMinute int
@@ -502,6 +511,59 @@ func (s *ClassroomService) Slots(ctx context.Context, teacherID, studentID uint6
 		slot.Available = !slot.StartAt.Before(now.Add(30*time.Minute)) && !slot.StartAt.After(now.AddDate(0, 0, 14)) && daily < 3 && !blocked(slot.StartAt, slot.EndAt, off) && !overlapsWithBreak(slot.StartAt, slot.EndAt, lessons, teacherID, studentID, teacher.BreakMinutes)
 		slots = append(slots, slot)
 	}
+	return slots, nil
+}
+
+func (s *ClassroomService) TeacherSchedule(ctx context.Context, teacherID uint64, day string) ([]TeacherScheduleSlot, error) {
+	teacher, err := s.Teacher(ctx, teacherID)
+	if err != nil {
+		return nil, err
+	}
+	if !validLessonDuration(teacher.LessonDurationMinutes) || !validBreakMinutes(teacher.BreakMinutes) {
+		return nil, bad("外教排班设置无效")
+	}
+	localDay, err := time.ParseInLocation("2006-01-02", day, mustClassroomLocation())
+	if err != nil || localDay.Format("2006-01-02") != day {
+		return nil, bad("日期格式无效")
+	}
+	start, end := localDay.UTC(), localDay.AddDate(0, 0, 1).UTC()
+	availability, err := s.Availability(ctx, teacherID)
+	if err != nil {
+		return nil, err
+	}
+	var off []model.TeacherTimeOff
+	if err := s.db.WithContext(ctx).Where("teacher_id = ? AND start_at < ? AND end_at > ?", teacherID, end, start).Find(&off).Error; err != nil {
+		return nil, err
+	}
+	var lessons []model.Lesson
+	if err := s.db.WithContext(ctx).Where("teacher_id = ? AND scheduled_start_at >= ? AND scheduled_start_at < ? AND status <> ?", teacherID, start, end, "cancelled").Order("scheduled_start_at ASC").Find(&lessons).Error; err != nil {
+		return nil, err
+	}
+	slots := make([]TeacherScheduleSlot, 0)
+	byStart := make(map[int64]int)
+	now := time.Now().UTC()
+	for _, slot := range scheduledSlots(start.Add(-48*time.Hour), end, prepareAvailability(availability), teacher.LessonDurationMinutes, teacher.BreakMinutes) {
+		if slot.StartAt.Before(start) {
+			continue
+		}
+		state := "open"
+		if blocked(slot.StartAt, slot.EndAt, off) {
+			state = "time_off"
+		} else if slot.StartAt.Before(now) {
+			state = "past"
+		}
+		byStart[slot.StartAt.Unix()] = len(slots)
+		slots = append(slots, TeacherScheduleSlot{StartAt: slot.StartAt, EndAt: slot.EndAt, State: state})
+	}
+	for _, lesson := range lessons {
+		booked := TeacherScheduleSlot{StartAt: lesson.ScheduledStartAt, EndAt: lesson.ScheduledEndAt, State: "booked", LessonID: lesson.ID, LessonStatus: lesson.Status}
+		if index, ok := byStart[lesson.ScheduledStartAt.Unix()]; ok {
+			slots[index] = booked
+		} else {
+			slots = append(slots, booked)
+		}
+	}
+	sort.Slice(slots, func(i, j int) bool { return slots[i].StartAt.Before(slots[j].StartAt) })
 	return slots, nil
 }
 
